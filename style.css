@@ -1,0 +1,316 @@
+/* Māmā — style BD : contours épais, ombres décalées, couleurs lagon. */
+
+:root {
+  --encre: #1B1B3A;
+  --gris: #4A4A6A;
+  --lagon: #DFF8F4;
+  --blanc: #FFFFFF;
+  --beau: #6FE7DA;      /* prix doux */
+  --variable: #FFE27A;  /* prix stables */
+  --hausse: #FF9DB8;    /* prix en hausse */
+  --turquoise: #1FD6C4;
+  --jaune: #FFD23F;
+  --hibiscus: #FF5C8A;
+  --titre: 'Bricolage Grotesque', 'Trebuchet MS', sans-serif;
+  --texte: 'Figtree', system-ui, sans-serif;
+  --ombre: 4px 4px 0 var(--encre);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: #BDEFE8;
+  background-image: radial-gradient(rgba(27, 27, 58, 0.12) 1.5px, transparent 1.6px);
+  background-size: 12px 12px;
+  color: var(--encre);
+  font-family: var(--texte);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+a { color: var(--encre); font-weight: 700; }
+a:hover { color: #C2185B; }
+small { font-size: 13px; }
+h1, h2, p { margin: 0; }
+h2 { font-family: var(--titre); font-size: 20px; margin: 22px 0 10px; }
+
+:focus-visible { outline: 3px solid var(--hibiscus); outline-offset: 2px; }
+.vue:focus { outline: none; }
+
+/* ---------- Cadre de l'application ---------- */
+
+.app {
+  max-width: 430px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--lagon);
+  border-inline: 3px solid var(--encre);
+}
+
+.entete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 6px 16px;
+}
+
+.logo { display: flex; align-items: center; gap: 6px; text-decoration: none; }
+.logo-nom { font-family: var(--titre); font-size: 32px; letter-spacing: -1px; line-height: 1; }
+
+.maj-date { padding: 0 20px; font-size: 13px; color: var(--gris); text-align: right; min-height: 18px; }
+
+.vue { flex: 1; padding: 10px 20px 24px 16px; }
+
+/* ---------- Briques réutilisables ---------- */
+
+.carte {
+  border: 3px solid var(--encre);
+  border-radius: 20px;
+  box-shadow: var(--ombre);
+  background: var(--blanc);
+  color: var(--encre);
+}
+
+.fond-beau { background-color: var(--beau); }
+.fond-variable { background-color: var(--variable); }
+.fond-hausse { background-color: var(--hausse); }
+.plein-beau { background: var(--turquoise); }
+.plein-variable { background: var(--jaune); }
+.plein-hausse { background: var(--hibiscus); }
+
+.bouton {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 3px solid var(--encre);
+  border-radius: 22px;
+  background: var(--blanc);
+  color: var(--encre);
+  font: 700 15px var(--texte);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.bouton:active, a.carte:active, button.carte:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--encre); }
+
+.bouton-maj { display: flex; align-items: center; gap: 8px; background: var(--jaune); box-shadow: 3px 3px 0 var(--encre); }
+.bouton-maj:disabled { cursor: progress; }
+.bouton-maj.en-cours .maj-icone { animation: tourne 0.7s linear infinite; }
+
+.rond { width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; box-shadow: 3px 3px 0 var(--encre); }
+
+.cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 54px;
+  margin-top: 20px;
+  border-radius: 27px;
+  background: var(--hibiscus);
+  box-shadow: var(--ombre);
+  font: 800 19px var(--titre);
+  text-decoration: none;
+}
+.cta:hover { color: var(--encre); }
+
+.titre { font-family: var(--titre); font-size: 36px; line-height: 0.98; letter-spacing: -1.3px; }
+.titre.moyen { font-size: 26px; line-height: 1.05; letter-spacing: -0.8px; }
+.surtitre { display: block; font-weight: 700; margin-bottom: 4px; }
+.chiffre { font-family: var(--titre); font-size: 20px; white-space: nowrap; }
+.chiffre.grand { font-size: 32px; letter-spacing: -1px; line-height: 1.1; }
+.note { margin-top: 12px; font-size: 13px; color: var(--gris); }
+
+.etiquette {
+  display: inline-block;
+  padding: 6px 12px;
+  border: 3px solid var(--encre);
+  border-radius: 14px;
+  background: var(--jaune);
+  font: 800 16px var(--titre);
+  transform: rotate(3deg);
+  white-space: nowrap;
+}
+
+.prix-geant { margin-top: 10px; font-size: 44px; letter-spacing: -1.5px; line-height: 1.15; box-shadow: var(--ombre); transform: rotate(-2deg); }
+
+.bulle {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 4px 12px;
+  border: 3px solid var(--encre);
+  border-radius: 16px;
+  background: var(--blanc);
+  font: 800 15px var(--titre);
+  transform: rotate(-3deg);
+  animation: pop 0.5s 0.25s both;
+}
+
+.pastille { padding: 2px 10px; border-radius: 12px; font: 800 18px var(--titre); white-space: nowrap; }
+.pastille.bord { border: 3px solid var(--encre); font: 700 13px var(--texte); padding: 6px 12px; border-radius: 18px; }
+
+.rang { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rang.haut { margin: 6px 0 14px; }
+.rang h2 { margin-bottom: 10px; }
+
+/* Frise niho mano (dents de requin) */
+.niho {
+  height: 14px;
+  background:
+    linear-gradient(135deg, var(--encre) 25%, transparent 25%) -7px 0 / 14px 14px,
+    linear-gradient(225deg, var(--encre) 25%, transparent 25%) -7px 0 / 14px 14px;
+  background-repeat: repeat-x;
+}
+
+/* ---------- Écran météo ---------- */
+
+.choix-commune { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; font-weight: 700; font-size: 14px; }
+.choix-commune select { box-shadow: 3px 3px 0 var(--encre); max-width: 190px; }
+
+.hero { overflow: hidden; border-radius: 28px; box-shadow: 5px 5px 0 var(--encre);
+  background-image: radial-gradient(rgba(27, 27, 58, 0.16) 1.5px, transparent 1.6px); background-size: 9px 9px; }
+.hero-haut { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 16px 12px 14px 18px; }
+.hero .niho { background-color: var(--blanc); border-top: 3px solid var(--encre); }
+.hero-bas { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px 12px 18px; background: var(--blanc); }
+.hero-bas small { font-weight: 700; }
+.mascotte { flex-shrink: 0; line-height: 0; animation: rebond 3.2s ease-in-out infinite; }
+
+.tuiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.tuile { display: flex; flex-direction: column; gap: 3px; padding: 10px; text-decoration: none; }
+.tuile:hover { color: var(--encre); }
+.tuile-etat { font-size: 12px; font-weight: 700; }
+.tuile-nom { font-size: 15px; font-weight: 700; line-height: 1.15; flex: 1; }
+
+/* ---------- Listes ---------- */
+
+.liste { display: flex; flex-direction: column; gap: 12px; }
+
+.ligne {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 14px;
+  border-radius: 18px;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ligne:hover { color: var(--encre); }
+div.ligne { cursor: default; }
+.ligne-texte { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ligne-texte small { font-weight: 400; }
+.ligne input[type="checkbox"] { width: 24px; height: 24px; accent-color: var(--encre); flex-shrink: 0; }
+
+.puces { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.puce.active { background: var(--jaune); box-shadow: 3px 3px 0 var(--encre); }
+.puces + .niho { margin-bottom: 16px; }
+
+/* ---------- Fiche produit ---------- */
+
+.magasin { display: flex; flex-direction: column; gap: 5px; padding: 8px 12px; border-radius: 18px; }
+.magasin small { color: var(--gris); }
+.jauge { height: 12px; border: 2px solid var(--encre); border-radius: 6px; background: var(--blanc); overflow: hidden; }
+.jauge-barre { height: 100%; border-radius: 4px; transform-origin: left; animation: grandit-x 0.6s ease-out both; }
+
+.barres { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; align-items: end; height: 70px; }
+.barre { border: 2px solid var(--encre); border-radius: 6px; transform-origin: bottom; animation: grandit-y 0.5s ease-out both; }
+
+/* ---------- Panier, formulaire, états vides ---------- */
+
+.total { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 12px 18px; margin-bottom: 16px; }
+.total small { font-weight: 700; }
+
+.formulaire { display: flex; flex-direction: column; gap: 6px; padding: 16px; }
+.formulaire label { font-weight: 700; font-size: 14px; margin-top: 6px; }
+.formulaire input, .formulaire select { width: 100%; cursor: text; font-weight: 600; }
+.formulaire .cta { margin-top: 14px; cursor: pointer; }
+
+.vide { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 0; text-align: center; }
+
+/* ---------- Onglets et toast ---------- */
+
+.onglets {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
+  background: var(--blanc);
+  border-top: 3px solid var(--encre);
+}
+.onglets a {
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 2px solid transparent;
+  border-radius: 16px;
+  font-size: 12px;
+  text-decoration: none;
+}
+.onglets a:hover { color: var(--encre); }
+.onglets a[aria-current="page"] { background: var(--jaune); border-color: var(--encre); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  padding: 10px 16px;
+  border: 3px solid var(--encre);
+  border-radius: 18px;
+  box-shadow: var(--ombre);
+  background: var(--blanc);
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px) rotate(-1deg);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.toast.visible { opacity: 1; transform: translate(-50%, 0) rotate(-1deg); }
+
+/* ---------- Animations ---------- */
+
+.vue > * { animation: entree 0.35s ease-out both; }
+.vue > *:nth-child(2) { animation-delay: 0.04s; }
+.vue > *:nth-child(3) { animation-delay: 0.08s; }
+.vue > *:nth-child(4) { animation-delay: 0.12s; }
+.vue > *:nth-child(n+5) { animation-delay: 0.16s; }
+
+svg .rayons, svg .oeil, svg .fleur-oreille, svg .eclair { transform-box: fill-box; transform-origin: center; }
+.soleil .rayons { animation: tourne 16s linear infinite; }
+.soleil .oeil, .nuage .oeil { animation: cligne 4.5s infinite; }
+.soleil .fleur-oreille { animation: balance 3s ease-in-out infinite; }
+.nuage { animation: derive 4s ease-in-out infinite; }
+.orage { animation: gronde 2.6s ease-in-out infinite; }
+.orage .eclair { animation: flash 2.6s infinite; }
+.tiare.danse { animation: balance 4s ease-in-out infinite; }
+.logo:hover .tiare { animation: tourne 0.8s ease-in-out; }
+
+@keyframes tourne { to { transform: rotate(360deg); } }
+@keyframes balance { 0%, 100% { transform: rotate(-10deg); } 50% { transform: rotate(12deg); } }
+@keyframes rebond { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes derive { 0%, 100% { transform: translateX(-2px); } 50% { transform: translateX(3px); } }
+@keyframes cligne { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+@keyframes gronde { 0%, 78%, 100% { transform: translateX(0); } 82% { transform: translateX(-2px); } 86% { transform: translateX(2px); } 90% { transform: translateX(-1px); } }
+@keyframes flash { 0%, 76%, 100% { opacity: 1; transform: scale(1); } 80% { opacity: 0.2; } 84% { opacity: 1; transform: scale(1.18); } 88% { opacity: 0.4; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.4) rotate(-12deg); } 70% { transform: scale(1.1) rotate(-3deg); } to { opacity: 1; transform: scale(1) rotate(-3deg); } }
+@keyframes entree { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes grandit-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes grandit-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+/* Respecte le réglage « réduire les animations » du téléphone. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

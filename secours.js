@@ -1,0 +1,88 @@
+window.MAMA_SECOURS = {
+  "maj": "2026-10-01T10:30:00-10:00",
+  "note": "Données fictives pour la démonstration. À remplacer par de vrais relevés.",
+  "communes": [
+    { "id": "punaauia", "nom": "Punaauia", "ile": "Tahiti", "panier": 12480, "variation": -3 },
+    { "id": "faaa", "nom": "Faa'a", "ile": "Tahiti", "panier": 12610, "variation": -2 },
+    { "id": "papeete", "nom": "Papeete", "ile": "Tahiti", "panier": 12890, "variation": 0 },
+    { "id": "pirae", "nom": "Pirae", "ile": "Tahiti", "panier": 12950, "variation": 1 },
+    { "id": "mahina", "nom": "Mahina", "ile": "Tahiti", "panier": 13120, "variation": 1 },
+    { "id": "taravao", "nom": "Taravao", "ile": "Tahiti", "panier": 13740, "variation": 6 },
+    { "id": "moorea", "nom": "Moorea-Maiao", "ile": "Moorea", "panier": 13390, "variation": 2 },
+    { "id": "uturoa", "nom": "Uturoa", "ile": "Raiatea", "panier": 13980, "variation": -2 },
+    { "id": "borabora", "nom": "Bora-Bora", "ile": "Autres", "panier": 15260, "variation": 4 },
+    { "id": "rangiroa", "nom": "Rangiroa", "ile": "Autres", "panier": 16120, "variation": 1 }
+  ],
+  "produits": [
+    {
+      "id": "thon-rouge",
+      "nom": "Thon rouge",
+      "unite": "1 kg",
+      "variation": -12,
+      "tendance": [2150, 2150, 2090, 2000, 1950, 1900, 1890],
+      "magasins": [
+        { "nom": "Marché de Papeete", "lieu": "Papeete", "prix": 1890, "releve": "ce matin" },
+        { "nom": "Magasin A", "lieu": "Punaauia", "prix": 2100, "releve": "hier" },
+        { "nom": "Magasin B", "lieu": "Faa'a", "prix": 2350, "releve": "il y a 2 jours" }
+      ]
+    },
+    {
+      "id": "poulet",
+      "nom": "Cuisses de poulet surgelées",
+      "unite": "2 kg",
+      "variation": -8,
+      "tendance": [1290, 1280, 1250, 1250, 1220, 1200, 1190],
+      "magasins": [
+        { "nom": "Magasin A", "lieu": "Punaauia", "prix": 1190, "releve": "ce matin" },
+        { "nom": "Magasin B", "lieu": "Faa'a", "prix": 1350, "releve": "hier" },
+        { "nom": "Supérette C", "lieu": "Punaauia", "prix": 1650, "releve": "il y a 3 jours" }
+      ]
+    },
+    {
+      "id": "uru",
+      "nom": "Uru",
+      "unite": "la pièce",
+      "variation": -5,
+      "tendance": [320, 320, 310, 300, 300, 300, 300],
+      "magasins": [
+        { "nom": "Bord de route · PK 15", "lieu": "Punaauia", "prix": 300, "releve": "ce matin" },
+        { "nom": "Marché de Papeete", "lieu": "Papeete", "prix": 350, "releve": "hier" }
+      ]
+    },
+    {
+      "id": "lait",
+      "nom": "Lait UHT demi-écrémé",
+      "unite": "1 L",
+      "variation": 1,
+      "tendance": [188, 188, 188, 190, 190, 190, 190],
+      "magasins": [
+        { "nom": "Magasin B", "lieu": "Faa'a", "prix": 190, "releve": "hier" },
+        { "nom": "Magasin A", "lieu": "Punaauia", "prix": 198, "releve": "ce matin" },
+        { "nom": "Supérette C", "lieu": "Punaauia", "prix": 240, "releve": "il y a 2 jours" }
+      ]
+    },
+    {
+      "id": "riz",
+      "nom": "Riz blanc",
+      "unite": "1 kg",
+      "variation": 0,
+      "tendance": [150, 150, 150, 150, 150, 150, 150],
+      "magasins": [
+        { "nom": "Magasin A", "lieu": "Punaauia", "prix": 150, "releve": "ce matin" },
+        { "nom": "Magasin B", "lieu": "Faa'a", "prix": 152, "releve": "hier" }
+      ]
+    },
+    {
+      "id": "tomates",
+      "nom": "Tomates",
+      "unite": "1 kg",
+      "variation": 18,
+      "tendance": [680, 690, 720, 750, 780, 800, 800],
+      "magasins": [
+        { "nom": "Marché de Papeete", "lieu": "Papeete", "prix": 800, "releve": "ce matin" },
+        { "nom": "Magasin A", "lieu": "Punaauia", "prix": 890, "releve": "hier" },
+        { "nom": "Magasin B", "lieu": "Faa'a", "prix": 950, "releve": "hier" }
+      ]
+    }
+  ]
+};
