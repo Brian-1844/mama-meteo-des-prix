@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  var SOURCE = 'data/prix.json'; // à remplacer par l'URL d'une API quand il y en aura une
+  var SOURCE = 'prix.json'; // à remplacer par l'URL d'une API quand il y en aura une
   var vue = document.getElementById('vue');
   var boutonMaj = document.getElementById('maj');
 
