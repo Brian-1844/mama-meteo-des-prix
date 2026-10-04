@@ -1,23 +1,46 @@
 # Māmā · les promos du fenua
 
-Prototype d'application web : les commerces de Polynésie française publient eux-mêmes leurs promotions, en échange d'un abonnement. Le public consulte gratuitement.
+Application web où les commerces de Polynésie française publient eux-mêmes leurs promotions, en échange d'un abonnement. Le public consulte gratuitement, sans compte.
 
-> **Les commerces, prix et promotions fournis sont fictifs.** La connexion des commerçants est une démonstration, pas une vraie protection (voir plus bas).
+Les pages sont hébergées sur GitHub Pages ; les comptes et les données sont dans Firebase (projet `mama-promos`).
 
-## Le principe
+## Les trois rôles
 
-- **Public** : liste des promos triées par remise, filtre par commune et par secteur (alimentation, sport, auto…), fiche de chaque commerce.
-- **Commerçant** : connexion par identifiant et mot de passe, puis publication de 4 promos au maximum, retirables à tout moment.
-- **Abonnement** : chaque commerce a une date de fin d'abonnement. Passé cette date, ses promos disparaissent de l'app et il ne peut plus publier.
-- **Mise à jour** : le bouton recharge les promos sans passer par le cache.
+| Rôle | Ce qu'il peut faire |
+|---|---|
+| Public | Voir les promos, filtrer par commune et par secteur, signaler une promo |
+| Commerce | Se connecter, publier 4 promos au maximum (60 jours au plus chacune), les retirer |
+| Administrateur | Créer un commerce, régler la fin d'abonnement, suspendre, supprimer une promo, traiter les signalements |
 
-## Mettre en ligne sur GitHub Pages
+Un commerce dont l'abonnement est terminé ou qui est suspendu n'apparaît plus dans l'app et ne peut plus publier.
 
-Tous les fichiers sont au même niveau, sans dossier : on peut les déposer depuis un téléphone.
+## Mise en service (à faire une seule fois)
 
-1. Dans le dépôt, **Add file → Upload files**, choisir tous les fichiers, puis **Commit changes**. Les fichiers du même nom sont remplacés.
-2. L'ancien fichier `prix.json` ne sert plus et peut être supprimé.
-3. Pages est déjà activé si l'ancienne version était en ligne ; l'adresse ne change pas.
+### 1. Coller les règles de sécurité
+
+Console Firebase → **Firestore** → onglet **Règles**. Remplacer tout le contenu par celui du fichier `firestore.rules`, puis **Publier**.
+
+### 2. Créer le compte administrateur
+
+1. Console Firebase → **Authentication** → onglet **Utilisateurs** → **Ajouter un utilisateur**. Saisir son e-mail et un mot de passe solide.
+2. Dans la liste, copier la valeur de la colonne **UID de l'utilisateur**.
+3. **Firestore** → onglet **Données** → **Commencer une collection**. ID de collection : `admins`.
+4. ID du document : coller l'UID. Ajouter un champ `role`, type string, valeur `admin`. **Enregistrer**.
+
+### 3. Déposer les fichiers sur GitHub
+
+Dans le dépôt, **Add file → Upload files**, déposer tous les fichiers de ce dossier (ils sont au même niveau, sans sous-dossier), puis **Commit changes**. Les anciens `promos.json`, `prix.json` et `secours.js` ne servent plus et peuvent être supprimés.
+
+### 4. Vérifier
+
+Ouvrir l'app, onglet **Mon commerce**, se connecter avec le compte administrateur : le tableau de bord d'administration doit s'afficher. Créer un commerce de test, se déconnecter, se connecter avec ce commerce et publier une promo.
+
+## Au quotidien
+
+- **Nouveau commerce** : formulaire « Ajouter un commerce » du tableau de bord. Transmettre au commerçant son e-mail et son mot de passe provisoire ; il peut le changer avec « Mot de passe oublié ? ».
+- **Renouvellement** : changer la date « Abonnement jusqu'au » puis **Enregistrer**.
+- **Abus** : **Suspendre** cache toutes les promos du commerce ; **Supprimer** retire une seule promo.
+- **Signalements** : ils arrivent en haut du tableau de bord.
 
 ## Les fichiers
 
@@ -25,51 +48,32 @@ Tous les fichiers sont au même niveau, sans dossier : on peut les déposer depu
 index.html             structure de la page, en-tête, onglets
 style.css              couleurs, style BD, animations
 icones.js              dessins : tiare, soleil, nuage, orage
-app.js                 données, écrans, connexion de démonstration
-promos.json            commerces et promotions
-secours.js             copie de promos.json utilisée hors ligne
+app.js                 écrans, connexion, lecture et écriture dans Firebase
+config.js              identifiants du projet Firebase (non secrets)
+firestore.rules        règles de sécurité à coller dans la console Firebase
 icone.svg              icône de l'application
 manifest.webmanifest   installation sur l'écran d'accueil
 ```
 
-## Tester l'espace commerçant
+## Comment les données sont rangées
 
-Onglet **Mon commerce**, identifiant `magasin-a` (ou un autre identifiant de `promos.json`), mot de passe `demo`.
+- `commerces/<uid>` : nom, secteur, commune, adresse, tel, actif, abonnement (date).
+- `promos/<uid>_1` à `promos/<uid>_4` : les quatre emplacements d'un commerce. C'est ce nommage qui impose la limite de 4.
+- `admins/<uid>` : la fiche qui fait d'un compte un administrateur.
+- `signalements/<id>` : promo signalée, motif, date.
 
-- `magasin-a` (alimentation) a 3 promos : il peut en publier une quatrième, puis la limite bloque.
-- `magasin-e` a un abonnement terminé : ses promos sont cachées et la publication est bloquée.
+`<uid>` est l'identifiant que Firebase donne à chaque compte.
 
-## Gérer les commerces et les abonnements (version démo)
+## Réglages
 
-Dans `promos.json`, chaque commerce a une ligne :
+Dans `app.js` : `MAX_JOURS` (durée d'une promo), `SECTEURS`, `COMMUNES` (suggestions), `CACHE_MINUTES`.
 
-```json
-{ "id": "magasin-a", "nom": "Magasin A", "secteur": "Alimentation", "commune": "Punaauia", "adresse": "…", "tel": "…", "abonnement": "2027-03-31" }
-```
+Pour passer de 4 à 3 promos : mettre `MAX_PROMOS = 3` dans `app.js` **et** retirer la ligne `_4` dans `firestore.rules`, puis republier les règles.
 
-- Ajouter un commerce : ajouter une ligne avec un `id` unique et un `secteur`.
-- Les secteurs possibles sont listés dans `app.js`, constante `SECTEURS`. Le nom doit être écrit exactement pareil dans `promos.json`. Un secteur sans promo en cours n'apparaît pas dans les filtres.
-- Renouveler un abonnement : changer la date `abonnement` (année-mois-jour).
-- Le nombre de promos par commerce se règle dans `app.js`, constante `MAX_PROMOS`.
+## Limites connues
 
-Après une modification de `promos.json`, régénérer la copie de secours :
-
-```
-printf 'window.MAMA_SECOURS = %s;\n' "$(cat promos.json)" > secours.js
-```
-
-## Limites de cette démonstration
-
-- **Pas de vraie sécurité.** Le mot de passe est écrit dans `app.js`, que tout le monde peut lire. Ne jamais y mettre de vrais mots de passe.
-- **Pas de partage.** Une promo publiée par un commerçant reste dans son navigateur : les autres utilisateurs ne la voient pas.
-
-## Passer à la vraie version
-
-GitHub Pages ne fait qu'afficher des fichiers : il ne peut ni vérifier un mot de passe ni enregistrer une promo. Il faut ajouter un serveur avec une base de données, qui se charge de :
-
-1. **Les comptes** : un identifiant et un mot de passe par commerce, vérifiés côté serveur.
-2. **Les promos** : enregistrées dans la base, lisibles par tous, modifiables seulement par leur commerce.
-3. **Les règles** : 4 promos au maximum et abonnement à jour, vérifiés côté serveur (les contrôles de `app.js` ne suffisent pas, ils sont contournables).
-4. **L'abonnement** : une date de fin par commerce, mise à jour à chaque paiement.
-
-Un service comme Supabase ou Firebase fournit comptes et base de données sans écrire de serveur ; l'application peut rester sur GitHub Pages. Dans `app.js`, les endroits à brancher sont marqués par le mot « serveur » en commentaire.
+- **Forfait gratuit** : environ 50 000 lectures par jour. Chaque ouverture de l'app lit tous les commerces et toutes les promos, puis garde le résultat 5 minutes. Avec quelques dizaines de commerces, c'est largement suffisant ; au-delà, il faudra optimiser.
+- **Suppression d'un compte** : l'app sait suspendre un commerce, pas supprimer son compte. La suppression se fait dans la console Firebase (Authentication, puis la fiche dans Firestore).
+- **Paiement** : l'abonnement est encaissé hors de l'app ; l'administrateur règle la date à la main.
+- **Signalements** : n'importe qui peut en envoyer, sans compte.
+- **En cas d'erreur `auth/unauthorized-domain`** : Authentication → Paramètres → Domaines autorisés → ajouter `brian-1844.github.io`.

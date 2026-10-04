@@ -357,3 +357,21 @@ svg .rayons, svg .oeil, svg .fleur-oreille, svg .eclair { transform-box: fill-bo
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Version en ligne : signalement et administration ---------- */
+
+.promo-bloc { display: flex; flex-direction: column; gap: 6px; }
+div.promo { cursor: default; }
+.signaler summary { padding: 10px 4px; font-size: 13px; font-weight: 700; color: var(--gris); cursor: pointer; }
+.signaler form { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
+.signaler select { flex: 1; min-width: 180px; }
+
+.admin-commerce { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 18px; }
+.admin-commerce small { color: var(--gris); }
+.admin-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.admin-actions input[type="date"] { flex: 1; min-width: 150px; }
+.admin-promo { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 2px dashed var(--encre); font-size: 14px; }
+.danger { background: var(--hausse); }
+.attente { padding: 40px 0; text-align: center; font-weight: 700; color: var(--gris); }
+.info { color: #0B6B61; font-weight: 700; font-size: 14px; min-height: 20px; }
+button:disabled { opacity: 0.6; cursor: progress; }

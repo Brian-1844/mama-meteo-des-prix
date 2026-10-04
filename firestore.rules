@@ -1,0 +1,68 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Administrateur : son identifiant (UID) a une fiche dans la collection « admins ».
+    function estAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Le commerce existe, n'est pas suspendu, et son abonnement est en cours.
+    function commerceValide(uid) {
+      let c = get(/databases/$(database)/documents/commerces/$(uid)).data;
+      return c.actif == true && c.abonnement > request.time;
+    }
+
+    // Contenu d'une promo : champs, tailles, prix promo plus bas, 62 jours au plus.
+    function promoValide() {
+      let p = request.resource.data;
+      return p.keys().hasOnly(['commerce', 'produit', 'prixNormal', 'prixPromo', 'fin', 'cree'])
+        && p.keys().hasAll(['commerce', 'produit', 'prixNormal', 'prixPromo', 'fin', 'cree'])
+        && p.produit is string && p.produit.size() > 0 && p.produit.size() <= 60
+        && p.prixNormal is int && p.prixPromo is int
+        && p.prixPromo > 0 && p.prixPromo < p.prixNormal && p.prixNormal <= 99999999
+        && p.fin is timestamp && p.fin > request.time
+        && p.fin < request.time + duration.value(62, 'd')
+        && p.cree == request.time;
+    }
+
+    // Les fiches admin ne se créent que depuis la console Firebase.
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Commerces : tout le monde lit, seul l'administrateur écrit.
+    match /commerces/{uid} {
+      allow read: if true;
+      allow write: if estAdmin();
+    }
+
+    // Promos : 4 emplacements par commerce, nommés <uid>_1 à <uid>_4.
+    match /promos/{id} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && id in [request.auth.uid + '_1', request.auth.uid + '_2',
+                  request.auth.uid + '_3', request.auth.uid + '_4']
+        && request.resource.data.commerce == request.auth.uid
+        && commerceValide(request.auth.uid)
+        && promoValide();
+      allow delete: if estAdmin()
+        || (request.auth != null && resource.data.commerce == request.auth.uid);
+    }
+
+    // Signalements : tout le monde peut en envoyer, seul l'administrateur les lit.
+    match /signalements/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['promo', 'commerce', 'produit', 'motif', 'cree'])
+        && request.resource.data.keys().hasAll(['promo', 'commerce', 'produit', 'motif', 'cree'])
+        && request.resource.data.promo is string && request.resource.data.promo.size() <= 80
+        && request.resource.data.commerce is string && request.resource.data.commerce.size() <= 60
+        && request.resource.data.produit is string && request.resource.data.produit.size() <= 60
+        && request.resource.data.motif is string && request.resource.data.motif.size() <= 60
+        && request.resource.data.cree == request.time;
+      allow read, delete: if estAdmin();
+    }
+  }
+}

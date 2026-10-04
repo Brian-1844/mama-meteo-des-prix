@@ -1,467 +1,711 @@
-/* Māmā — les promos du fenua. Application sans dépendance ni étape de build.
+/* Māmā — les promos du fenua. Version en ligne, branchée sur Firebase.
 
-   Côté public : la liste des promotions et des commerces.
-   Côté commerçant : connexion, puis gestion de ses promotions (4 au maximum).
+   Trois rôles :
+   - le public lit les promos, sans compte ;
+   - un commerce se connecte et gère ses 4 promos ;
+   - l'administrateur crée les commerces, règle les abonnements, modère.
 
-   ATTENTION — VERSION DE DÉMONSTRATION
-   La connexion et l'enregistrement des promotions sont simulés dans le
-   navigateur. Un vrai mot de passe ne se vérifie jamais dans le code d'une
-   page web : il faut un serveur. Voir README.md, « Passer à la vraie version ». */
-(function () {
-  'use strict';
+   Les contrôles faits ici (4 promos, abonnement, prix) sont là pour le confort.
+   La vraie barrière, ce sont les règles de sécurité : fichier firestore.rules. */
 
-  var SOURCE = 'promos.json';   // à remplacer par l'adresse du serveur
-  var MAX_PROMOS = 4;           // nombre de promotions par commerce
-  var MOT_DE_PASSE_DEMO = 'demo';
-  // Secteurs d'activité : chaque commerce en choisit un à l'inscription.
-  var SECTEURS = [
-    'Alimentation', 'Maison et bricolage', 'Auto, moto et vélo', 'Sport et loisirs',
-    'Mode et beauté', 'High-tech et électroménager', 'Restaurants et snacks', 'Services'
-  ];
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  sendPasswordResetEmail, createUserWithEmailAndPassword
+} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
+import {
+  getFirestore, collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
+  serverTimestamp, Timestamp
+} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
+import { firebaseConfig } from './config.js';
 
-  var vue = document.getElementById('vue');
-  var boutonMaj = document.getElementById('maj');
+const MAX_PROMOS = 4;        // doit correspondre aux emplacements _1 à _4 des règles
+const MAX_JOURS = 60;        // durée maximale d'une promo
+const CACHE_MINUTES = 5;     // évite de relire la base à chaque ouverture
+const SECTEURS = [
+  'Alimentation', 'Maison et bricolage', 'Auto, moto et vélo', 'Sport et loisirs',
+  'Mode et beauté', 'High-tech et électroménager', 'Restaurants et snacks', 'Services'
+];
+const COMMUNES = [
+  'Arue', 'Faa\'a', 'Hitia\'a O Te Ra', 'Mahina', 'Paea', 'Papara', 'Papeete', 'Pirae', 'Punaauia',
+  'Taiarapu-Est', 'Taiarapu-Ouest', 'Teva I Uta', 'Moorea-Maiao', 'Bora-Bora', 'Huahine', 'Taha\'a', 'Uturoa'
+];
+const MOTIFS = ['Prix différent en magasin', 'Produit indisponible', 'Promo terminée', 'Autre problème'];
 
-  var etat = {
-    donnees: null,
-    commune: 'toutes',
-    secteur: 'tous',
-    session: lire('session', null),      // identifiant du commerce connecté
-    ajoutees: lire('ajoutees', []),      // promos créées dans la démo
-    retirees: lire('retirees', []),      // identifiants des promos retirées dans la démo
-    erreur: ''
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const Icones = window.Icones;
+
+const vue = document.getElementById('vue');
+const boutonMaj = document.getElementById('maj');
+
+const etat = {
+  commerces: null,
+  promos: null,
+  majLe: 0,
+  horsLigne: false,
+  commune: 'toutes',
+  secteur: 'tous',
+  authPret: false,
+  utilisateur: null,
+  estAdmin: false,
+  signalements: []
+};
+
+/* ---------- Outils ---------- */
+
+function esc(texte) {
+  return String(texte == null ? '' : texte).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const prix = (n) => Number(n).toLocaleString('fr-FR') + ' F';
+const remise = (p) => Math.round((1 - p.prixPromo / p.prixNormal) * 100);
+
+function iso(ms) {
+  const d = new Date(ms);
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+
+function finDeJournee(texteIso) {
+  const p = texteIso.split('-').map(Number);
+  return new Date(p[0], p[1] - 1, p[2], 23, 59, 59);
+}
+
+const dateCourte = (ms) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
+const dateLongue = (ms) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+const commerce = (id) => (etat.commerces || []).find((c) => c.id === id);
+const abonnementActif = (c) => !!c && c.actif && c.abonnement > Date.now();
+const enCours = (p) => p.fin > Date.now();
+const promosDe = (id) => (etat.promos || []).filter((p) => p.commerce === id && enCours(p));
+
+function promosVisibles() {
+  return (etat.promos || [])
+    .filter((p) => enCours(p) && abonnementActif(commerce(p.commerce)))
+    .sort((a, b) => remise(b) - remise(a));
+}
+
+function toast(message) {
+  const t = document.getElementById('toast');
+  t.textContent = message;
+  t.classList.add('visible');
+  clearTimeout(toast.minuteur);
+  toast.minuteur = setTimeout(() => t.classList.remove('visible'), 3000);
+}
+
+function messageErreur(e) {
+  const code = (e && e.code) || '';
+  if (/invalid-credential|wrong-password|user-not-found|invalid-email|invalid-login/.test(code)) return 'Adresse e-mail ou mot de passe incorrect.';
+  if (/too-many-requests/.test(code)) return 'Trop de tentatives. Réessaie dans quelques minutes.';
+  if (/email-already-in-use/.test(code)) return 'Un compte existe déjà avec cette adresse e-mail.';
+  if (/weak-password/.test(code)) return 'Mot de passe trop court : 6 caractères au minimum.';
+  if (/permission-denied/.test(code)) return 'Action refusée : droits insuffisants ou abonnement terminé.';
+  if (/network-request-failed|unavailable/.test(code)) return 'Pas de connexion. Réessaie plus tard.';
+  return 'Une erreur est survenue' + (code ? ' (' + code + ')' : '') + '.';
+}
+
+/* Exécute une action liée à un bouton : le bloque pendant l'envoi, affiche l'erreur s'il y en a une. */
+async function action(bouton, travail) {
+  if (bouton) bouton.disabled = true;
+  try {
+    await travail();
+  } catch (e) {
+    console.error(e);
+    toast(messageErreur(e));
+  } finally {
+    if (bouton && bouton.isConnected) bouton.disabled = false;
+  }
+}
+
+/* ---------- Lecture de la base et bouton « Mise à jour » ---------- */
+
+function lireCache() {
+  try { return JSON.parse(localStorage.getItem('mama.cache') || 'null'); } catch (e) { return null; }
+}
+
+function ecrireCache() {
+  try {
+    localStorage.setItem('mama.cache', JSON.stringify({ t: etat.majLe, commerces: etat.commerces, promos: etat.promos }));
+  } catch (e) { /* stockage indisponible */ }
+}
+
+function appliquer(cache) {
+  etat.commerces = cache.commerces;
+  etat.promos = cache.promos;
+  etat.majLe = cache.t;
+}
+
+async function charger(forcer, manuel) {
+  const cache = lireCache();
+  if (!forcer && cache && Date.now() - cache.t < CACHE_MINUTES * 60000) {
+    appliquer(cache);
+    afficher();
+    return;
+  }
+
+  boutonMaj.classList.add('en-cours');
+  boutonMaj.disabled = true;
+  const debut = Date.now();
+  etat.horsLigne = false;
+
+  try {
+    const [c, p] = await Promise.all([getDocs(collection(db, 'commerces')), getDocs(collection(db, 'promos'))]);
+    etat.commerces = c.docs.map((d) => {
+      const x = d.data();
+      return {
+        id: d.id, nom: x.nom || '', secteur: x.secteur || '', commune: x.commune || '',
+        adresse: x.adresse || '', tel: x.tel || '', actif: x.actif === true,
+        abonnement: x.abonnement ? x.abonnement.toMillis() : 0
+      };
+    });
+    etat.promos = p.docs.map((d) => {
+      const x = d.data();
+      return {
+        id: d.id, commerce: x.commerce, produit: x.produit || '',
+        prixNormal: x.prixNormal, prixPromo: x.prixPromo, fin: x.fin ? x.fin.toMillis() : 0
+      };
+    });
+    etat.majLe = Date.now();
+    ecrireCache();
+  } catch (e) {
+    console.error(e);
+    etat.horsLigne = true;
+    if (cache) appliquer(cache);
+  }
+
+  if (manuel) await new Promise((ok) => setTimeout(ok, Math.max(0, 700 - (Date.now() - debut))));
+  boutonMaj.classList.remove('en-cours');
+  boutonMaj.disabled = false;
+  afficher();
+  if (manuel) {
+    const heure = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    toast(etat.horsLigne ? 'Hors ligne : dernières promos connues' : 'Promos mises à jour à ' + heure);
+  }
+}
+
+async function chargerSignalements() {
+  try {
+    const s = await getDocs(collection(db, 'signalements'));
+    etat.signalements = s.docs.map((d) => {
+      const x = d.data();
+      return { id: d.id, promo: x.promo, commerce: x.commerce, produit: x.produit, motif: x.motif, cree: x.cree ? x.cree.toMillis() : 0 };
+    }).sort((a, b) => b.cree - a.cree);
+  } catch (e) {
+    console.error(e);
+    etat.signalements = [];
+  }
+}
+
+/* ---------- Briques d'affichage ---------- */
+
+function interieurPromo(p, avecCommerce) {
+  const c = commerce(p.commerce);
+  const r = remise(p);
+  return '<span class="remise' + (r >= 30 ? ' forte' : '') + '">−' + r + ' %</span>' +
+    '<span class="promo-texte"><strong>' + esc(p.produit) + '</strong>' +
+    (avecCommerce && c ? '<small>' + esc(c.nom) + ' · ' + esc(c.commune) + '</small>' : '') +
+    '<small>jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
+    '<span class="promo-prix"><del>' + prix(p.prixNormal) + '</del><span class="chiffre">' + prix(p.prixPromo) + '</span></span>';
+}
+
+const cartePromo = (p) => '<a class="promo carte" href="#/commerce/' + esc(p.commerce) + '">' + interieurPromo(p, true) + '</a>';
+
+function vide(dessin, titre, texte) {
+  return '<div class="vide">' + dessin + '<h2>' + titre + '</h2><p class="note">' + texte + '</p></div>';
+}
+
+const enTete = (surtitre, titre, dessin) =>
+  '<div class="rang haut"><div><small class="surtitre">' + surtitre + '</small><h1 class="titre">' + titre + '</h1></div>' + dessin + '</div>';
+
+/* ---------- Écrans publics ---------- */
+
+function vuePromos() {
+  const visibles = promosVisibles();
+  const communes = [...new Set(etat.commerces.filter(abonnementActif).map((c) => c.commune))].sort();
+  const secteurs = SECTEURS.filter((s) => visibles.some((p) => commerce(p.commerce).secteur === s));
+  if (!secteurs.includes(etat.secteur)) etat.secteur = 'tous';
+  if (!communes.includes(etat.commune)) etat.commune = 'toutes';
+
+  const options = '<option value="toutes">Toutes les communes</option>' + communes.map((n) =>
+    '<option value="' + esc(n) + '"' + (n === etat.commune ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+
+  const puces = ['tous', ...secteurs].map((s) => {
+    const actif = s === etat.secteur;
+    return '<button type="button" class="bouton puce' + (actif ? ' active' : '') + '" data-secteur="' + esc(s) +
+      '" aria-pressed="' + actif + '">' + (s === 'tous' ? 'Tout' : esc(s)) + '</button>';
+  }).join('');
+
+  const filtrees = visibles.filter((p) => {
+    const c = commerce(p.commerce);
+    return (etat.commune === 'toutes' || c.commune === etat.commune) && (etat.secteur === 'tous' || c.secteur === etat.secteur);
+  });
+
+  const meilleure = visibles[0];
+  const liste = filtrees.length
+    ? filtrees.map(cartePromo).join('')
+    : (visibles.length
+      ? vide(Icones.nuage(110), 'Pas de promo ici pour l\'instant', 'Essaie une autre commune ou un autre secteur.')
+      : vide(Icones.nuage(110), 'Les premières promos arrivent', 'Reviens bientôt, ou touche « Mise à jour ».'));
+
+  return '' +
+    '<section class="hero carte fond-beau">' +
+      '<div class="hero-haut"><div class="hero-texte">' +
+        '<small class="surtitre">Ia ora na !</small>' +
+        '<h1 class="titre">' + visibles.length + ' promo' + (visibles.length > 1 ? 's' : '') + '<br>au fenua</h1>' +
+        '<span class="bulle">Mea māmā !</span>' +
+      '</div><div class="mascotte">' + Icones.soleil(128, true) + '</div></div>' +
+      '<div class="niho"></div>' +
+      '<div class="hero-bas">' + (meilleure
+        ? '<div><small>La plus forte remise</small><div class="chiffre" style="white-space:normal">' + esc(meilleure.produit) + '</div></div>' +
+          '<span class="etiquette">−' + remise(meilleure) + ' %</span>'
+        : '<div><small>Aucune promo en cours</small></div>') +
+      '</div>' +
+    '</section>' +
+    '<div class="filtres">' +
+      '<label class="surtitre" for="commune">Où cherches-tu ?</label>' +
+      '<select id="commune" class="bouton">' + options + '</select>' +
+      '<div class="puces">' + puces + '</div>' +
+    '</div>' +
+    '<div class="liste">' + liste + '</div>';
+}
+
+function vueCommerces() {
+  const actifs = etat.commerces.filter(abonnementActif).sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+  const lignes = actifs.map((c) => {
+    const n = promosDe(c.id).length;
+    return '<a class="ligne carte" href="#/commerce/' + esc(c.id) + '">' +
+      '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong><small>' + esc(c.secteur) + ' · ' + esc(c.commune) + '</small></span>' +
+      '<span class="pastille ' + (n ? 'fond-beau' : 'fond-variable') + '">' + n + ' promo' + (n > 1 ? 's' : '') + '</span></a>';
+  }).join('');
+
+  return enTete('Te mau fare toa · les commerces', 'Les commerces<br>partenaires', Icones.tiare(84, 'danse')) +
+    '<div class="niho"></div><div style="height:16px"></div>' +
+    '<div class="liste">' + (lignes || vide(Icones.nuage(110), 'Pas encore de commerce', 'Les premiers partenaires arrivent bientôt.')) + '</div>' +
+    '<p class="note">Tu tiens un commerce ? Ouvre l\'onglet « Mon commerce » pour publier tes promos.</p>';
+}
+
+function vueCommerce(id) {
+  const c = commerce(id);
+  if (!c || !abonnementActif(c)) return vueIntrouvable();
+  const promos = promosDe(id).sort((a, b) => remise(b) - remise(a));
+  const motifs = MOTIFS.map((m) => '<option>' + esc(m) + '</option>').join('');
+
+  const cartes = promos.map((p) =>
+    '<div class="promo-bloc"><div class="promo carte">' + interieurPromo(p, false) + '</div>' +
+    '<details class="signaler"><summary>Signaler un problème</summary>' +
+    '<form data-signaler="' + esc(p.id) + '"><select name="motif" class="bouton" aria-label="Motif du signalement">' + motifs + '</select>' +
+    '<button class="bouton" type="submit">Envoyer</button></form></details></div>').join('');
+
+  return '' +
+    '<div class="rang">' +
+      '<a class="bouton rond" href="#/commerces" aria-label="Retour aux commerces">' +
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg></a>' +
+      '<span class="pastille bord fond-beau">' + esc(c.secteur) + '</span>' +
+    '</div>' +
+    '<div class="rang haut"><div><h1 class="titre">' + esc(c.nom) + '</h1>' +
+    '<p class="note">' + esc(c.commune) + (c.adresse ? ' · ' + esc(c.adresse) : '') +
+    (c.tel ? '<br>Tél. <a href="tel:' + esc(c.tel.replace(/\s/g, '')) + '">' + esc(c.tel) + '</a>' : '') + '</p></div>' +
+    Icones.tiare(72, 'danse') + '</div>' +
+    '<div class="niho"></div>' +
+    '<h2>Ses promos du moment</h2>' +
+    '<div class="liste">' + (cartes || vide(Icones.nuage(110), 'Pas de promo en ce moment', 'Reviens bientôt !')) + '</div>';
+}
+
+/* ---------- Connexion ---------- */
+
+function vueConnexion() {
+  return enTete('Espace commerçant', 'Mon<br>commerce', Icones.tiare(84, 'danse')) +
+    '<form id="connexion" class="formulaire carte" novalidate>' +
+      '<label for="c-email">Adresse e-mail</label>' +
+      '<input id="c-email" name="email" class="bouton" type="email" autocomplete="username" autocapitalize="none" required>' +
+      '<label for="c-mdp">Mot de passe</label>' +
+      '<input id="c-mdp" name="motdepasse" class="bouton" type="password" autocomplete="current-password" required>' +
+      '<p class="erreur" role="alert"></p>' +
+      '<button class="bouton cta" type="submit">Se connecter</button>' +
+    '</form>' +
+    '<button type="button" class="lien-bouton" data-oubli="1">Mot de passe oublié ?</button>' +
+    '<p class="note">Pas encore de compte ? Les comptes sont créés par l\'équipe Māmā à la souscription de l\'abonnement.</p>';
+}
+
+/* ---------- Tableau de bord du commerce ---------- */
+
+function emplacementLibre(uid) {
+  for (let n = 1; n <= MAX_PROMOS; n++) {
+    const id = uid + '_' + n;
+    const p = etat.promos.find((x) => x.id === id);
+    if (!p || !enCours(p)) return id;
+  }
+  return null;
+}
+
+function vueTableau() {
+  const uid = etat.utilisateur.uid;
+  const c = commerce(uid);
+  const sortie = '<button type="button" class="lien-bouton" data-deconnexion="1">Se déconnecter</button>';
+
+  if (!c) {
+    return '<div class="vide">' + Icones.nuage(110) + '<h1 class="titre moyen">Compte sans commerce</h1>' +
+      '<p class="note">Ce compte (' + esc(etat.utilisateur.email) + ') n\'est rattaché à aucun commerce. Contacte l\'équipe Māmā.</p>' + sortie + '</div>';
+  }
+
+  const actif = abonnementActif(c);
+  const promos = promosDe(uid);
+  const plein = promos.length >= MAX_PROMOS;
+  const bloque = !actif || plein;
+
+  const lignes = promos.map((p) =>
+    '<div class="ligne carte"><span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
+    '<small>' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
+    '<button type="button" class="bouton retirer" data-retirer="' + esc(p.id) + '">Retirer</button></div>').join('');
+
+  const message = !c.actif ? 'Ton compte est suspendu : tes promos ne sont plus affichées. Contacte l\'équipe Māmā.'
+    : (!actif ? 'Ton abonnement est terminé : tes promos ne sont plus affichées. Renouvelle-le pour publier à nouveau.'
+      : (plein ? 'Tu as atteint la limite de ' + MAX_PROMOS + ' promos. Retires-en une pour en publier une autre.' : ''));
+
+  const auj = iso(Date.now());
+  const max = iso(Date.now() + MAX_JOURS * 86400000);
+
+  return '' +
+    '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
+    '<h1 class="titre moyen">' + esc(c.nom) + '</h1><p class="note">' + esc(c.secteur) + ' · ' + esc(c.commune) + '</p></div>' +
+    '<div class="mascotte">' + (actif ? Icones.soleil(88, true) : Icones.orage(88)) + '</div></div>' +
+
+    '<section class="total carte ' + (actif ? 'fond-beau' : 'fond-hausse') + '">' +
+      '<div><small>' + (!c.actif ? 'Compte suspendu' : (actif ? 'Abonnement actif jusqu\'au' : 'Abonnement terminé le')) + '</small>' +
+      '<div class="chiffre">' + dateLongue(c.abonnement) + '</div></div>' +
+      '<span class="etiquette"><span class="compteur">' + promos.length + ' / ' + MAX_PROMOS + '</span> promos</span>' +
+    '</section>' +
+
+    '<h2>Mes promos en ligne</h2>' +
+    '<div class="liste">' + (lignes || '<p class="note">Aucune promo publiée pour l\'instant.</p>') + '</div>' +
+
+    '<h2>Publier une promo</h2>' +
+    '<form id="ajout" class="formulaire carte" novalidate>' +
+      (message ? '<p class="erreur">' + esc(message) + '</p>' : '') +
+      '<fieldset' + (bloque ? ' disabled' : '') + '>' +
+        '<label for="a-produit">Produit ou service</label>' +
+        '<input id="a-produit" name="produit" class="bouton" maxlength="60" required>' +
+        '<div class="deux">' +
+          '<div><label for="a-normal">Prix normal (F)</label><input id="a-normal" name="prixNormal" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
+          '<div><label for="a-promo">Prix promo (F)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
+        '</div>' +
+        '<label for="a-fin">Dernier jour de la promo (' + MAX_JOURS + ' jours au plus)</label>' +
+        '<input id="a-fin" name="fin" class="bouton" type="date" min="' + auj + '" max="' + max + '" required>' +
+        '<p class="erreur" role="alert"></p>' +
+        '<button class="bouton cta" type="submit">Publier la promo</button>' +
+      '</fieldset>' +
+    '</form>' + sortie;
+}
+
+/* ---------- Tableau de bord de l'administrateur ---------- */
+
+function vueAdmin() {
+  const signalements = etat.signalements.map((s) => {
+    const c = commerce(s.commerce);
+    const existe = etat.promos.some((p) => p.id === s.promo);
+    return '<div class="admin-commerce carte fond-variable">' +
+      '<div><strong>' + esc(s.produit) + '</strong><br><small>' + esc(c ? c.nom : 'Commerce inconnu') + ' · ' + esc(s.motif) +
+      (s.cree ? ' · ' + dateCourte(s.cree) : '') + (existe ? '' : ' · promo déjà retirée') + '</small></div>' +
+      '<div class="admin-actions">' +
+      (existe ? '<button type="button" class="bouton danger" data-sig-supprimer="' + esc(s.id) + '" data-promo="' + esc(s.promo) + '">Supprimer la promo</button>' : '') +
+      '<button type="button" class="bouton" data-sig-ignorer="' + esc(s.id) + '">Classer</button></div></div>';
+  }).join('');
+
+  const commerces = etat.commerces.slice().sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map((c) => {
+    const statut = !c.actif ? ['fond-hausse', 'Suspendu']
+      : (c.abonnement > Date.now() ? ['fond-beau', 'Actif'] : ['fond-variable', 'Abonnement terminé']);
+    const promos = (etat.promos || []).filter((p) => p.commerce === c.id).map((p) =>
+      '<div class="admin-promo"><span>' + esc(p.produit) + ' · ' + prix(p.prixPromo) + (enCours(p) ? '' : ' · terminée') + '</span>' +
+      '<button type="button" class="bouton retirer danger" data-admin-supprimer="' + esc(p.id) + '">Supprimer</button></div>').join('');
+    return '<div class="admin-commerce carte">' +
+      '<div class="rang"><strong>' + esc(c.nom) + '</strong><span class="pastille bord ' + statut[0] + '">' + statut[1] + '</span></div>' +
+      '<small>' + esc(c.secteur) + ' · ' + esc(c.commune) + (c.tel ? ' · ' + esc(c.tel) : '') + '</small>' +
+      '<form class="admin-actions" data-abonnement="' + esc(c.id) + '">' +
+        '<label class="surtitre" for="ab-' + esc(c.id) + '">Abonnement jusqu\'au</label>' +
+        '<input id="ab-' + esc(c.id) + '" name="date" type="date" class="bouton" value="' + (c.abonnement ? iso(c.abonnement) : '') + '" required>' +
+        '<button class="bouton" type="submit">Enregistrer</button>' +
+        '<button type="button" class="bouton' + (c.actif ? ' danger' : '') + '" data-basculer="' + esc(c.id) + '" data-actif="' + (c.actif ? '0' : '1') + '">' +
+        (c.actif ? 'Suspendre' : 'Réactiver') + '</button>' +
+      '</form>' + promos + '</div>';
+  }).join('');
+
+  const secteurs = SECTEURS.map((s) => '<option>' + esc(s) + '</option>').join('');
+  const communes = COMMUNES.map((s) => '<option value="' + esc(s) + '"></option>').join('');
+  const dansUnAn = iso(Date.now() + 365 * 86400000);
+
+  return enTete('Administration', 'Tableau<br>de bord', Icones.tiare(84, 'danse')) +
+    '<h2>Signalements (' + etat.signalements.length + ')</h2>' +
+    '<div class="liste">' + (signalements || '<p class="note">Aucun signalement.</p>') + '</div>' +
+
+    '<h2>Commerces (' + etat.commerces.length + ')</h2>' +
+    '<div class="liste">' + (commerces || '<p class="note">Aucun commerce pour l\'instant.</p>') + '</div>' +
+
+    '<h2>Ajouter un commerce</h2>' +
+    '<form id="nouveau" class="formulaire carte" novalidate>' +
+      '<label for="n-nom">Nom du commerce</label><input id="n-nom" name="nom" class="bouton" maxlength="60" required>' +
+      '<label for="n-secteur">Secteur</label><select id="n-secteur" name="secteur" class="bouton">' + secteurs + '</select>' +
+      '<label for="n-commune">Commune</label><input id="n-commune" name="commune" class="bouton" list="communes" maxlength="40" required>' +
+      '<datalist id="communes">' + communes + '</datalist>' +
+      '<label for="n-adresse">Adresse</label><input id="n-adresse" name="adresse" class="bouton" maxlength="80">' +
+      '<label for="n-tel">Téléphone</label><input id="n-tel" name="tel" class="bouton" type="tel" maxlength="20">' +
+      '<label for="n-email">E-mail de connexion du commerce</label><input id="n-email" name="email" class="bouton" type="email" autocapitalize="none" autocomplete="off" required>' +
+      '<label for="n-mdp">Mot de passe provisoire (6 caractères au moins)</label><input id="n-mdp" name="motdepasse" class="bouton" autocomplete="off" minlength="6" required>' +
+      '<label for="n-abo">Abonnement jusqu\'au</label><input id="n-abo" name="abonnement" class="bouton" type="date" value="' + dansUnAn + '" required>' +
+      '<p class="erreur" role="alert"></p>' +
+      '<button class="bouton cta" type="submit">Créer le commerce</button>' +
+    '</form>' +
+    '<button type="button" class="lien-bouton" data-deconnexion="1">Se déconnecter</button>';
+}
+
+function vueIntrouvable() {
+  return '<div class="vide">' + Icones.nuage(120) + '<h1 class="titre moyen">Page introuvable</h1>' +
+    '<a class="bouton cta" href="#/">Retour aux promos</a></div>';
+}
+
+function vueErreur() {
+  return '<div class="vide">' + Icones.orage(120) + '<h1 class="titre moyen">Pas de promos pour l\'instant</h1>' +
+    '<p class="note">Impossible de joindre le serveur. Vérifie ta connexion puis touche « Mise à jour ».</p></div>';
+}
+
+/* ---------- Routeur ---------- */
+
+function afficher() {
+  const morceaux = (location.hash.replace(/^#\/?/, '') || 'promos').split('/');
+  const route = morceaux[0];
+  const param = decodeURIComponent(morceaux[1] || '');
+  let html;
+
+  if (route === 'espace') {
+    if (!etat.authPret) html = '<p class="attente">Chargement…</p>';
+    else if (!etat.utilisateur) html = vueConnexion();
+    else if (!etat.commerces) html = etat.horsLigne ? vueErreur() : '<p class="attente">Chargement…</p>';
+    else html = etat.estAdmin ? vueAdmin() : vueTableau();
+  } else if (!etat.commerces) html = etat.horsLigne ? vueErreur() : '<p class="attente">Chargement…</p>';
+  else if (route === 'promos') html = vuePromos();
+  else if (route === 'commerces') html = vueCommerces();
+  else if (route === 'commerce') html = vueCommerce(param);
+  else html = vueIntrouvable();
+
+  vue.innerHTML = html;
+
+  const onglet = route === 'commerce' ? 'commerces' : route;
+  document.querySelectorAll('.onglets a').forEach((a) => {
+    if (a.getAttribute('data-onglet') === onglet) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+
+  document.getElementById('maj-date').textContent = etat.majLe
+    ? 'Promos à jour au ' + new Date(etat.majLe).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : '';
+}
+
+/* ---------- Événements ---------- */
+
+window.addEventListener('hashchange', () => {
+  afficher();
+  window.scrollTo(0, 0);
+  vue.focus({ preventScroll: true });
+});
+
+boutonMaj.addEventListener('click', async () => {
+  if (etat.estAdmin) await chargerSignalements();
+  charger(true, true);
+});
+
+vue.addEventListener('change', (e) => {
+  if (e.target.id === 'commune') { etat.commune = e.target.value; afficher(); }
+});
+
+vue.addEventListener('click', (e) => {
+  const cible = (selecteur) => e.target.closest(selecteur);
+  let b;
+
+  if ((b = cible('[data-secteur]'))) { etat.secteur = b.getAttribute('data-secteur'); afficher(); return; }
+
+  if ((b = cible('[data-deconnexion]'))) {
+    action(b, async () => { await signOut(auth); toast('À bientôt !'); });
+    return;
+  }
+
+  if ((b = cible('[data-oubli]'))) {
+    const email = (document.getElementById('c-email').value || '').trim();
+    if (!email) { toast('Écris d\'abord ton adresse e-mail.'); return; }
+    action(b, async () => {
+      await sendPasswordResetEmail(auth, email);
+      toast('E-mail de réinitialisation envoyé.');
+    });
+    return;
+  }
+
+  if ((b = cible('[data-retirer]'))) {
+    action(b, async () => {
+      await deleteDoc(doc(db, 'promos', b.getAttribute('data-retirer')));
+      await charger(true);
+      toast('Promo retirée');
+    });
+    return;
+  }
+
+  if ((b = cible('[data-admin-supprimer]'))) {
+    if (!confirm('Supprimer cette promo ?')) return;
+    action(b, async () => {
+      await deleteDoc(doc(db, 'promos', b.getAttribute('data-admin-supprimer')));
+      await charger(true);
+      toast('Promo supprimée');
+    });
+    return;
+  }
+
+  if ((b = cible('[data-basculer]'))) {
+    const activer = b.getAttribute('data-actif') === '1';
+    if (!activer && !confirm('Suspendre ce commerce ? Ses promos ne seront plus affichées.')) return;
+    action(b, async () => {
+      await updateDoc(doc(db, 'commerces', b.getAttribute('data-basculer')), { actif: activer });
+      await charger(true);
+      toast(activer ? 'Commerce réactivé' : 'Commerce suspendu');
+    });
+    return;
+  }
+
+  if ((b = cible('[data-sig-ignorer]')) || (b = cible('[data-sig-supprimer]'))) {
+    const idSignalement = b.getAttribute('data-sig-ignorer') || b.getAttribute('data-sig-supprimer');
+    const idPromo = b.getAttribute('data-promo');
+    action(b, async () => {
+      if (idPromo) await deleteDoc(doc(db, 'promos', idPromo));
+      await deleteDoc(doc(db, 'signalements', idSignalement));
+      await chargerSignalements();
+      await charger(true);
+      toast(idPromo ? 'Promo supprimée' : 'Signalement classé');
+    });
+  }
+});
+
+vue.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const bouton = f.querySelector('button[type="submit"]');
+  const zone = f.querySelector('.erreur[role="alert"]');
+  const refuser = (texte) => { if (zone) zone.textContent = texte; };
+  if (zone) zone.textContent = '';
+
+  /* Envoi avec affichage de l'erreur dans le formulaire. */
+  const envoyer = async (travail) => {
+    bouton.disabled = true;
+    try { await travail(); } catch (err) { console.error(err); refuser(messageErreur(err)); }
+    if (bouton.isConnected) bouton.disabled = false;
   };
 
-  /* ---------- Outils ---------- */
-
-  function lire(cle, defaut) {
-    try {
-      var v = localStorage.getItem('mama.' + cle);
-      return v ? JSON.parse(v) : defaut;
-    } catch (e) { return defaut; }
+  if (f.id === 'connexion') {
+    envoyer(() => signInWithEmailAndPassword(auth, f.email.value.trim(), f.motdepasse.value));
+    return;
   }
 
-  function ecrire(cle, valeur) {
-    try { localStorage.setItem('mama.' + cle, JSON.stringify(valeur)); } catch (e) { /* stockage indisponible */ }
-  }
+  if (f.id === 'ajout') {
+    const uid = etat.utilisateur.uid;
+    const produit = f.produit.value.trim();
+    const normal = Math.round(Number(f.prixNormal.value));
+    const promo = Math.round(Number(f.prixPromo.value));
+    const fin = f.fin.value;
+    const emplacement = emplacementLibre(uid);
 
-  function esc(texte) {
-    return String(texte).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
+    if (!emplacement) return refuser('Limite de ' + MAX_PROMOS + ' promos atteinte.');
+    if (!produit) return refuser('Indique le nom du produit.');
+    if (!(normal > 0) || !(promo > 0)) return refuser('Indique les deux prix.');
+    if (promo >= normal) return refuser('Le prix promo doit être plus bas que le prix normal.');
+    if (!fin || finDeJournee(fin).getTime() < Date.now()) return refuser('Choisis un dernier jour à partir d\'aujourd\'hui.');
+    if (finDeJournee(fin).getTime() > Date.now() + (MAX_JOURS + 1) * 86400000) return refuser('La promo ne peut pas durer plus de ' + MAX_JOURS + ' jours.');
 
-  function prix(n) { return Number(n).toLocaleString('fr-FR') + ' F'; }
-
-  function aujourdhui() {
-    var d = new Date();
-    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-  }
-
-  function dateLisible(iso) {
-    var p = String(iso).split('-');
-    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
-  }
-
-  function remise(p) { return Math.round((1 - p.prixPromo / p.prixNormal) * 100); }
-
-  function commerce(id) {
-    return etat.donnees.commerces.filter(function (c) { return c.id === id; })[0];
-  }
-
-  function abonnementActif(c) { return !!c && c.abonnement >= aujourdhui(); }
-
-  /* Toutes les promos connues : celles du fichier, moins les retirées, plus les ajoutées. */
-  function toutesLesPromos() {
-    return etat.donnees.promos
-      .filter(function (p) { return etat.retirees.indexOf(p.id) < 0; })
-      .concat(etat.ajoutees);
-  }
-
-  function promosDuCommerce(id) {
-    return toutesLesPromos().filter(function (p) { return p.commerce === id && p.fin >= aujourdhui(); });
-  }
-
-  /* Ce que le public voit : promos en cours, de commerces dont l'abonnement est à jour. */
-  function promosVisibles() {
-    return toutesLesPromos()
-      .filter(function (p) { return p.fin >= aujourdhui() && abonnementActif(commerce(p.commerce)); })
-      .sort(function (a, b) { return remise(b) - remise(a); });
-  }
-
-  function toast(message) {
-    var t = document.getElementById('toast');
-    t.textContent = message;
-    t.classList.add('visible');
-    clearTimeout(toast.minuteur);
-    toast.minuteur = setTimeout(function () { t.classList.remove('visible'); }, 2600);
-  }
-
-  /* ---------- Données et bouton « Mise à jour » ---------- */
-
-  function charger(manuel) {
-    boutonMaj.classList.add('en-cours');
-    boutonMaj.disabled = true;
-    var debut = Date.now();
-    var enLigne = true;
-
-    return fetch(SOURCE + '?t=' + debut, { cache: 'no-store' })
-      .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      })
-      .then(function (donnees) { etat.donnees = donnees; })
-      .catch(function () {
-        enLigne = false;
-        etat.donnees = etat.donnees || window.MAMA_SECOURS || null;
-      })
-      .then(function () {
-        var reste = manuel ? Math.max(0, 700 - (Date.now() - debut)) : 0;
-        return new Promise(function (ok) { setTimeout(ok, reste); });
-      })
-      .then(function () {
-        boutonMaj.classList.remove('en-cours');
-        boutonMaj.disabled = false;
-        afficher();
-        if (manuel) {
-          var heure = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-          toast(enLigne ? 'Promos mises à jour à ' + heure : 'Hors ligne : dernières promos connues');
-        }
+    envoyer(async () => {
+      await setDoc(doc(db, 'promos', emplacement), {
+        commerce: uid, produit: produit, prixNormal: normal, prixPromo: promo,
+        fin: Timestamp.fromDate(finDeJournee(fin)), cree: serverTimestamp()
       });
-  }
-
-  /* ---------- Briques d'affichage ---------- */
-
-  function cartePromo(p, avecCommerce) {
-    var c = commerce(p.commerce);
-    var r = remise(p);
-    var ligne = avecCommerce && c ? '<small>' + esc(c.nom) + ' · ' + esc(c.commune) + '</small>' : '';
-    return '<a class="promo carte" href="#/commerce/' + esc(p.commerce) + '">' +
-      '<span class="remise' + (r >= 30 ? ' forte' : '') + '">−' + r + ' %</span>' +
-      '<span class="promo-texte"><strong>' + esc(p.produit) + '</strong>' +
-      ligne + '<small>jusqu\'au ' + dateLisible(p.fin) + '</small></span>' +
-      '<span class="promo-prix"><del>' + prix(p.prixNormal) + '</del><span class="chiffre">' + prix(p.prixPromo) + '</span></span></a>';
-  }
-
-  function vide(dessin, titre, texte) {
-    return '<div class="vide">' + dessin + '<h2>' + titre + '</h2><p class="note">' + texte + '</p></div>';
-  }
-
-  /* ---------- Écrans publics ---------- */
-
-  function vuePromos() {
-    var visibles = promosVisibles();
-
-    var communes = [];
-    etat.donnees.commerces.forEach(function (c) {
-      if (abonnementActif(c) && communes.indexOf(c.commune) < 0) communes.push(c.commune);
-    });
-    communes.sort();
-
-    var options = '<option value="toutes">Toutes les communes</option>' + communes.map(function (n) {
-      return '<option value="' + esc(n) + '"' + (n === etat.commune ? ' selected' : '') + '>' + esc(n) + '</option>';
-    }).join('');
-
-    // On ne propose que les secteurs qui ont au moins une promo en cours.
-    var secteurs = SECTEURS.filter(function (s) {
-      return visibles.some(function (p) { return commerce(p.commerce).secteur === s; });
-    });
-    if (secteurs.indexOf(etat.secteur) < 0) etat.secteur = 'tous';
-
-    var puces = ['tous'].concat(secteurs).map(function (s) {
-      var actif = s === etat.secteur;
-      return '<button type="button" class="bouton puce' + (actif ? ' active' : '') + '" data-secteur="' + esc(s) +
-        '" aria-pressed="' + actif + '">' + (s === 'tous' ? 'Tout' : esc(s)) + '</button>';
-    }).join('');
-
-    var filtrees = visibles.filter(function (p) {
-      var c = commerce(p.commerce);
-      return (etat.commune === 'toutes' || c.commune === etat.commune) &&
-             (etat.secteur === 'tous' || c.secteur === etat.secteur);
-    });
-
-    var meilleure = visibles[0];
-    var liste = filtrees.length
-      ? filtrees.map(function (p) { return cartePromo(p, true); }).join('')
-      : vide(Icones.nuage(110), 'Pas de promo ici pour l\'instant', 'Essaie une autre commune ou un autre secteur.');
-
-    return '' +
-      '<section class="hero carte fond-beau">' +
-        '<div class="hero-haut">' +
-          '<div class="hero-texte">' +
-            '<small class="surtitre">Ia ora na !</small>' +
-            '<h1 class="titre">' + visibles.length + ' promos<br>au fenua</h1>' +
-            '<span class="bulle">Mea māmā !</span>' +
-          '</div>' +
-          '<div class="mascotte">' + Icones.soleil(128, true) + '</div>' +
-        '</div>' +
-        '<div class="niho"></div>' +
-        '<div class="hero-bas">' +
-          (meilleure
-            ? '<div><small>La plus forte remise</small><div class="chiffre">' + esc(meilleure.produit) + '</div></div>' +
-              '<span class="etiquette">−' + remise(meilleure) + ' %</span>'
-            : '<div><small>Aucune promo en cours</small></div>') +
-        '</div>' +
-      '</section>' +
-
-      '<div class="filtres">' +
-        '<label class="surtitre" for="commune">Où cherches-tu ?</label>' +
-        '<select id="commune" class="bouton">' + options + '</select>' +
-        '<div class="puces">' + puces + '</div>' +
-      '</div>' +
-
-      '<div class="liste">' + liste + '</div>';
-  }
-
-  function vueCommerces() {
-    var lignes = etat.donnees.commerces
-      .filter(abonnementActif)
-      .sort(function (a, b) { return a.nom.localeCompare(b.nom, 'fr'); })
-      .map(function (c) {
-        var n = promosDuCommerce(c.id).length;
-        return '<a class="ligne carte" href="#/commerce/' + esc(c.id) + '">' +
-          '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong><small>' + esc(c.secteur) + ' · ' + esc(c.commune) + '</small></span>' +
-          '<span class="pastille ' + (n ? 'fond-beau' : 'fond-variable') + '">' + n + ' promo' + (n > 1 ? 's' : '') + '</span></a>';
-      }).join('');
-
-    return '' +
-      '<div class="rang haut"><div><small class="surtitre">Te mau fare toa · les commerces</small>' +
-      '<h1 class="titre">Les commerces<br>partenaires</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
-      '<div class="niho"></div><div style="height:16px"></div>' +
-      '<div class="liste">' + lignes + '</div>' +
-      '<p class="note">Tu tiens un commerce ? Ouvre l\'onglet « Mon commerce » pour publier tes promos.</p>';
-  }
-
-  function vueCommerce(id) {
-    var c = commerce(id);
-    if (!c || !abonnementActif(c)) return vueIntrouvable();
-    var promos = promosDuCommerce(id).sort(function (a, b) { return remise(b) - remise(a); });
-
-    return '' +
-      '<div class="rang">' +
-        '<a class="bouton rond" href="#/commerces" aria-label="Retour aux commerces">' +
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg></a>' +
-        '<span class="pastille bord fond-beau">' + esc(c.secteur) + '</span>' +
-      '</div>' +
-      '<div class="rang haut"><div><h1 class="titre">' + esc(c.nom) + '</h1>' +
-      '<p class="note">' + esc(c.commune) + ' · ' + esc(c.adresse) + '<br>Tél. <a href="tel:' + esc(c.tel.replace(/\s/g, '')) + '">' + esc(c.tel) + '</a></p></div>' +
-      Icones.tiare(72, 'danse') + '</div>' +
-      '<div class="niho"></div>' +
-      '<h2>Ses promos du moment</h2>' +
-      '<div class="liste">' + (promos.length
-        ? promos.map(function (p) { return cartePromo(p, false); }).join('')
-        : vide(Icones.nuage(110), 'Pas de promo en ce moment', 'Reviens bientôt !')) + '</div>';
-  }
-
-  /* ---------- Espace commerçant ---------- */
-
-  function vueConnexion() {
-    var comptes = etat.donnees.commerces.map(function (c) { return '<code>' + esc(c.id) + '</code>'; }).join(', ');
-    return '' +
-      '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
-      '<h1 class="titre">Mon<br>commerce</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
-      '<form id="connexion" class="formulaire carte" novalidate>' +
-        '<label for="c-id">Identifiant</label>' +
-        '<input id="c-id" name="identifiant" class="bouton" autocomplete="username" autocapitalize="none" required>' +
-        '<label for="c-mdp">Mot de passe</label>' +
-        '<input id="c-mdp" name="motdepasse" class="bouton" type="password" autocomplete="current-password" required>' +
-        '<p class="erreur" role="alert">' + esc(etat.erreur) + '</p>' +
-        '<button class="bouton cta" type="submit">Se connecter</button>' +
-      '</form>' +
-      '<div class="demo"><strong>Démonstration.</strong> Identifiants : ' + comptes +
-      '. Mot de passe : <code>' + MOT_DE_PASSE_DEMO + '</code>. Ce n\'est pas une vraie protection : la vraie version vérifiera le mot de passe sur un serveur.</div>';
-  }
-
-  function vueTableau() {
-    var c = commerce(etat.session);
-    if (!c) { etat.session = null; ecrire('session', null); return vueConnexion(); }
-
-    var actif = abonnementActif(c);
-    var promos = promosDuCommerce(c.id);
-    var plein = promos.length >= MAX_PROMOS;
-    var bloque = !actif || plein;
-
-    var lignes = promos.map(function (p) {
-      return '<div class="ligne carte">' +
-        '<span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
-        '<small>' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · jusqu\'au ' + dateLisible(p.fin) + '</small></span>' +
-        '<button type="button" class="bouton retirer" data-retirer="' + esc(p.id) + '">Retirer</button></div>';
-    }).join('');
-
-    var message = !actif
-      ? 'Ton abonnement est terminé : tes promos ne sont plus affichées. Renouvelle-le pour publier à nouveau.'
-      : (plein ? 'Tu as atteint la limite de ' + MAX_PROMOS + ' promos. Retires-en une pour en publier une autre.' : '');
-
-    return '' +
-      '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
-      '<h1 class="titre moyen">' + esc(c.nom) + '</h1><p class="note">' + esc(c.secteur) + ' · ' + esc(c.commune) + '</p></div>' +
-      '<div class="mascotte">' + (actif ? Icones.soleil(88, true) : Icones.orage(88)) + '</div></div>' +
-
-      '<section class="total carte ' + (actif ? 'fond-beau' : 'fond-hausse') + '">' +
-        '<div><small>' + (actif ? 'Abonnement actif jusqu\'au' : 'Abonnement terminé le') + '</small>' +
-        '<div class="chiffre">' + dateLisible(c.abonnement) + '</div></div>' +
-        '<span class="etiquette"><span class="compteur">' + promos.length + ' / ' + MAX_PROMOS + '</span> promos</span>' +
-      '</section>' +
-
-      '<h2>Mes promos en ligne</h2>' +
-      '<div class="liste">' + (lignes || '<p class="note">Aucune promo publiée pour l\'instant.</p>') + '</div>' +
-
-      '<h2>Publier une promo</h2>' +
-      '<form id="ajout" class="formulaire carte" novalidate>' +
-        (message ? '<p class="erreur">' + esc(message) + '</p>' : '') +
-        '<fieldset' + (bloque ? ' disabled' : '') + '>' +
-          '<label for="a-produit">Produit</label>' +
-          '<input id="a-produit" name="produit" class="bouton" maxlength="60" required placeholder="Nom du produit ou du service">' +
-          '<div class="deux">' +
-            '<div><label for="a-normal">Prix normal (F)</label><input id="a-normal" name="prixNormal" class="bouton" type="number" inputmode="numeric" min="1" max="999999" required></div>' +
-            '<div><label for="a-promo">Prix promo (F)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1" max="999999" required></div>' +
-          '</div>' +
-          '<label for="a-fin">Dernier jour de la promo</label>' +
-          '<input id="a-fin" name="fin" class="bouton" type="date" min="' + aujourdhui() + '" required>' +
-          '<p class="erreur" role="alert">' + (bloque ? '' : esc(etat.erreur)) + '</p>' +
-          '<button class="bouton cta" type="submit">Publier la promo</button>' +
-        '</fieldset>' +
-      '</form>' +
-      '<button type="button" class="lien-bouton" data-deconnexion="1">Se déconnecter</button>' +
-      '<div class="demo"><strong>Démonstration.</strong> Les promos publiées ici restent sur cet appareil. Dans la vraie version, elles seront envoyées au serveur et visibles par tout le monde.</div>';
-  }
-
-  function vueIntrouvable() {
-    return '<div class="vide">' + Icones.nuage(120) + '<h1 class="titre moyen">Page introuvable</h1>' +
-      '<a class="bouton cta" href="#/">Retour aux promos</a></div>';
-  }
-
-  function vueErreur() {
-    return '<div class="vide">' + Icones.orage(120) + '<h1 class="titre moyen">Pas de promos pour l\'instant</h1>' +
-      '<p class="note">Impossible de lire ' + esc(SOURCE) + '. Vérifie ta connexion puis touche « Mise à jour ».</p></div>';
-  }
-
-  /* ---------- Routeur ---------- */
-
-  function afficher() {
-    var morceaux = (location.hash.replace(/^#\/?/, '') || 'promos').split('/');
-    var route = morceaux[0];
-    var param = decodeURIComponent(morceaux[1] || '');
-    var html;
-
-    if (!etat.donnees) html = vueErreur();
-    else if (route === 'promos') html = vuePromos();
-    else if (route === 'commerces') html = vueCommerces();
-    else if (route === 'commerce') html = vueCommerce(param);
-    else if (route === 'espace') html = etat.session ? vueTableau() : vueConnexion();
-    else html = vueIntrouvable();
-
-    vue.innerHTML = html;
-    etat.erreur = '';
-
-    var onglet = route === 'commerce' ? 'commerces' : route;
-    Array.prototype.forEach.call(document.querySelectorAll('.onglets a'), function (a) {
-      if (a.getAttribute('data-onglet') === onglet) a.setAttribute('aria-current', 'page');
-      else a.removeAttribute('aria-current');
-    });
-
-    var date = document.getElementById('maj-date');
-    date.textContent = etat.donnees && etat.donnees.maj
-      ? 'Promos à jour au ' + new Date(etat.donnees.maj).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
-      : '';
-  }
-
-  /* ---------- Événements ---------- */
-
-  window.addEventListener('hashchange', function () {
-    afficher();
-    window.scrollTo(0, 0);
-    vue.focus({ preventScroll: true });
-  });
-
-  boutonMaj.addEventListener('click', function () { charger(true); });
-
-  vue.addEventListener('change', function (e) {
-    if (e.target.id === 'commune') { etat.commune = e.target.value; afficher(); }
-  });
-
-  vue.addEventListener('click', function (e) {
-    var secteur = e.target.closest('[data-secteur]');
-    if (secteur) { etat.secteur = secteur.getAttribute('data-secteur'); afficher(); return; }
-
-    var retirer = e.target.closest('[data-retirer]');
-    if (retirer) {
-      var id = retirer.getAttribute('data-retirer');
-      var avant = etat.ajoutees.length;
-      etat.ajoutees = etat.ajoutees.filter(function (p) { return p.id !== id; });
-      if (etat.ajoutees.length === avant) etat.retirees.push(id);
-      ecrire('ajoutees', etat.ajoutees);
-      ecrire('retirees', etat.retirees);
-      afficher();
-      toast('Promo retirée');
-      return;
-    }
-
-    if (e.target.closest('[data-deconnexion]')) {
-      etat.session = null;
-      ecrire('session', null);
-      afficher();
-      toast('À bientôt !');
-    }
-  });
-
-  vue.addEventListener('submit', function (e) {
-    e.preventDefault();
-    var f = e.target;
-
-    if (f.id === 'connexion') {
-      var id = f.identifiant.value.trim().toLowerCase();
-      // DÉMO : dans la vraie version, cette vérification se fait sur le serveur.
-      if (commerce(id) && f.motdepasse.value === MOT_DE_PASSE_DEMO) {
-        etat.session = id;
-        ecrire('session', id);
-        afficher();
-        toast('Ia ora na, ' + commerce(id).nom + ' !');
-      } else {
-        etat.erreur = 'Identifiant ou mot de passe incorrect.';
-        afficher();
-      }
-      return;
-    }
-
-    if (f.id === 'ajout') {
-      var c = commerce(etat.session);
-      var produit = f.produit.value.trim();
-      var normal = Math.round(Number(f.prixNormal.value));
-      var promo = Math.round(Number(f.prixPromo.value));
-      var fin = f.fin.value;
-
-      // Les mêmes règles devront être revérifiées par le serveur.
-      if (!abonnementActif(c)) etat.erreur = 'Abonnement terminé.';
-      else if (promosDuCommerce(c.id).length >= MAX_PROMOS) etat.erreur = 'Limite de ' + MAX_PROMOS + ' promos atteinte.';
-      else if (!produit) etat.erreur = 'Indique le nom du produit.';
-      else if (!(normal > 0) || !(promo > 0)) etat.erreur = 'Indique les deux prix.';
-      else if (promo >= normal) etat.erreur = 'Le prix promo doit être plus bas que le prix normal.';
-      else if (!fin || fin < aujourdhui()) etat.erreur = 'Choisis un dernier jour à partir d\'aujourd\'hui.';
-
-      if (etat.erreur) {
-        var zone = f.querySelector('fieldset .erreur');
-        if (zone) zone.textContent = etat.erreur;
-        etat.erreur = '';
-        return;
-      }
-
-      etat.ajoutees.push({
-        id: 'local-' + Date.now(),
-        commerce: c.id,
-        produit: produit,
-        prixNormal: normal,
-        prixPromo: promo,
-        fin: fin
-      });
-      ecrire('ajoutees', etat.ajoutees);
-      afficher();
+      await charger(true);
       toast('Promo publiée !');
-    }
-  });
+    });
+    return;
+  }
 
-  /* ---------- Démarrage ---------- */
+  if (f.hasAttribute('data-signaler')) {
+    const p = etat.promos.find((x) => x.id === f.getAttribute('data-signaler'));
+    if (!p) return;
+    action(bouton, async () => {
+      await addDoc(collection(db, 'signalements'), {
+        promo: p.id, commerce: p.commerce, produit: p.produit, motif: f.motif.value, cree: serverTimestamp()
+      });
+      f.closest('details').open = false;
+      toast('Māuruuru ! Signalement envoyé.');
+    });
+    return;
+  }
 
-  document.getElementById('logo-tiare').innerHTML = Icones.tiare(40, 'danse');
-  charger(false);
-})();
+  if (f.hasAttribute('data-abonnement')) {
+    if (!f.date.value) return;
+    action(bouton, async () => {
+      await updateDoc(doc(db, 'commerces', f.getAttribute('data-abonnement')), {
+        abonnement: Timestamp.fromDate(finDeJournee(f.date.value))
+      });
+      await charger(true);
+      toast('Abonnement enregistré');
+    });
+    return;
+  }
+
+  if (f.id === 'nouveau') {
+    const nom = f.nom.value.trim();
+    const commune = f.commune.value.trim();
+    const email = f.email.value.trim();
+    const mdp = f.motdepasse.value;
+    if (!nom || !commune) return refuser('Indique le nom et la commune.');
+    if (!email) return refuser('Indique l\'adresse e-mail du commerce.');
+    if (mdp.length < 6) return refuser('Mot de passe trop court : 6 caractères au minimum.');
+    if (!f.abonnement.value) return refuser('Indique la fin de l\'abonnement.');
+
+    envoyer(async () => {
+      // Le compte est créé depuis une seconde connexion, pour que l'administrateur reste connecté.
+      const app2 = initializeApp(firebaseConfig, 'creation-' + Date.now());
+      let uid;
+      try {
+        const auth2 = getAuth(app2);
+        const compte = await createUserWithEmailAndPassword(auth2, email, mdp);
+        uid = compte.user.uid;
+        await signOut(auth2);
+      } finally {
+        await deleteApp(app2);
+      }
+      await setDoc(doc(db, 'commerces', uid), {
+        nom: nom, secteur: f.secteur.value, commune: commune,
+        adresse: f.adresse.value.trim(), tel: f.tel.value.trim(),
+        actif: true, abonnement: Timestamp.fromDate(finDeJournee(f.abonnement.value)),
+        cree: serverTimestamp()
+      });
+      await charger(true);
+      toast('Commerce créé : ' + nom);
+    });
+  }
+});
+
+/* ---------- Démarrage ---------- */
+
+document.getElementById('logo-tiare').innerHTML = Icones.tiare(40, 'danse');
+
+onAuthStateChanged(auth, async (utilisateur) => {
+  etat.utilisateur = utilisateur;
+  etat.estAdmin = false;
+  etat.signalements = [];
+  if (utilisateur) {
+    try {
+      etat.estAdmin = (await getDoc(doc(db, 'admins', utilisateur.uid))).exists();
+    } catch (e) { console.error(e); }
+    if (etat.estAdmin) await chargerSignalements();
+  }
+  etat.authPret = true;
+  afficher();
+  // Un commerçant ou l'administrateur travaille toujours sur des données fraîches.
+  if (utilisateur) charger(true);
+});
+
+afficher();
+charger(false);
