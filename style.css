@@ -240,7 +240,7 @@ div.ligne { cursor: default; }
   position: sticky;
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
   background: var(--blanc);
@@ -279,6 +279,49 @@ div.ligne { cursor: default; }
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .toast.visible { opacity: 1; transform: translate(-50%, 0) rotate(-1deg); }
+
+/* ---------- Promotions ---------- */
+
+.promo { display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px; text-decoration: none; transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.promo:hover { color: var(--encre); }
+.remise {
+  flex-shrink: 0;
+  width: 62px;
+  height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--encre);
+  border-radius: 50%;
+  background: var(--hibiscus);
+  font: 800 17px var(--titre);
+  transform: rotate(-8deg);
+  animation: pop-remise 0.45s 0.15s both;
+}
+.remise.forte { background: var(--jaune); }
+.promo-texte { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.promo-texte strong { line-height: 1.2; }
+.promo-texte small { color: var(--gris); }
+.promo-prix { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.promo-prix del { font-size: 13px; color: var(--gris); }
+.promo-prix .chiffre { font-size: 22px; }
+
+.filtres { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 16px; }
+.filtres select { box-shadow: 3px 3px 0 var(--encre); width: 100%; }
+.puces { margin-bottom: 0; }
+
+.compteur { font: 800 26px var(--titre); }
+.retirer { min-height: 44px; padding: 0 12px; font-size: 13px; flex-shrink: 0; }
+.formulaire fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.formulaire fieldset:disabled { opacity: 0.55; }
+.formulaire .deux { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.formulaire .deux > div { display: flex; flex-direction: column; gap: 6px; }
+.erreur { color: #A8123E; font-weight: 700; font-size: 14px; min-height: 20px; }
+.demo { border: 3px dashed var(--encre); border-radius: 16px; padding: 10px 12px; font-size: 13px; background: var(--blanc); margin-top: 16px; }
+.demo code { font-weight: 700; }
+.lien-bouton { background: none; border: 0; padding: 12px 0; font: 700 14px var(--texte); color: var(--encre); text-decoration: underline; cursor: pointer; }
+
+@keyframes pop-remise { from { opacity: 0; transform: scale(0.3) rotate(-40deg); } 70% { transform: scale(1.15) rotate(-4deg); } to { opacity: 1; transform: scale(1) rotate(-8deg); } }
 
 /* ---------- Animations ---------- */
 

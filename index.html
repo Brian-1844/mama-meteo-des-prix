@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Māmā · la météo des prix</title>
-  <meta name="description" content="La météo des prix en Polynésie française : où fait-il beau sur le caddie ?">
+  <title>Māmā · les promos du fenua</title>
+  <meta name="description" content="Les promotions des commerces de Polynésie française, publiées par les commerçants.">
   <meta name="theme-color" content="#6FE7DA">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icone.svg" type="image/svg+xml">
@@ -16,7 +16,7 @@
 <body>
   <div class="app">
     <header class="entete">
-      <a class="logo" href="#/" aria-label="Māmā, retour à la météo du jour">
+      <a class="logo" href="#/" aria-label="Māmā, retour aux promos">
         <span id="logo-tiare"></span>
         <span class="logo-nom">māmā</span>
       </a>
@@ -31,21 +31,17 @@
     <main id="vue" class="vue" tabindex="-1"></main>
 
     <nav class="onglets" aria-label="Navigation principale">
-      <a href="#/" data-onglet="meteo">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 3v2M12 19v2M3 12h2M19 12h2"></path></svg>
-        <span>Météo</span>
+      <a href="#/" data-onglet="promos">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8z"></path><circle cx="7.500" cy="8.500" r="1.500"></circle></svg>
+        <span>Promos</span>
       </a>
-      <a href="#/communes" data-onglet="communes">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"></path><path d="M9 4v14M15 6v14"></path></svg>
-        <span>Communes</span>
+      <a href="#/commerces" data-onglet="commerces">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l2-6h14l2 6z"></path><path d="M4 10v10h16V10"></path><path d="M10 20v-6h4v6"></path></svg>
+        <span>Commerces</span>
       </a>
-      <a href="#/panier" data-onglet="panier">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h16l-1.500 10h-13z"></path><path d="M8 9l4-5 4 5"></path></svg>
-        <span>Mon panier</span>
-      </a>
-      <a href="#/signaler" data-onglet="signaler">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.500"></circle></svg>
-        <span>Signaler</span>
+      <a href="#/espace" data-onglet="espace">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 4-6 8-6s8 2 8 6"></path></svg>
+        <span>Mon commerce</span>
       </a>
     </nav>
 

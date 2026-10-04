@@ -1,20 +1,35 @@
-/* Māmā — la météo des prix. Application sans dépendance ni étape de build.
-   1. Les données viennent de data/prix.json (voir charger()).
-   2. Chaque écran est une fonction vueXxx() qui renvoie du HTML.
-   3. Le routeur lit l'ancre de l'URL (#/, #/communes, #/produit/<id>…). */
+/* Māmā — les promos du fenua. Application sans dépendance ni étape de build.
+
+   Côté public : la liste des promotions et des commerces.
+   Côté commerçant : connexion, puis gestion de ses promotions (4 au maximum).
+
+   ATTENTION — VERSION DE DÉMONSTRATION
+   La connexion et l'enregistrement des promotions sont simulés dans le
+   navigateur. Un vrai mot de passe ne se vérifie jamais dans le code d'une
+   page web : il faut un serveur. Voir README.md, « Passer à la vraie version ». */
 (function () {
   'use strict';
 
-  var SOURCE = 'prix.json'; // à remplacer par l'URL d'une API quand il y en aura une
+  var SOURCE = 'promos.json';   // à remplacer par l'adresse du serveur
+  var MAX_PROMOS = 4;           // nombre de promotions par commerce
+  var MOT_DE_PASSE_DEMO = 'demo';
+  // Secteurs d'activité : chaque commerce en choisit un à l'inscription.
+  var SECTEURS = [
+    'Alimentation', 'Maison et bricolage', 'Auto, moto et vélo', 'Sport et loisirs',
+    'Mode et beauté', 'High-tech et électroménager', 'Restaurants et snacks', 'Services'
+  ];
+
   var vue = document.getElementById('vue');
   var boutonMaj = document.getElementById('maj');
 
   var etat = {
     donnees: null,
-    commune: lire('commune', 'punaauia'),
-    ile: 'Tahiti',
-    panier: lire('panier', []),
-    signalements: lire('signalements', [])
+    commune: 'toutes',
+    secteur: 'tous',
+    session: lire('session', null),      // identifiant du commerce connecté
+    ajoutees: lire('ajoutees', []),      // promos créées dans la démo
+    retirees: lire('retirees', []),      // identifiants des promos retirées dans la démo
+    erreur: ''
   };
 
   /* ---------- Outils ---------- */
@@ -38,25 +53,40 @@
 
   function prix(n) { return Number(n).toLocaleString('fr-FR') + ' F'; }
 
-  function pct(v) { return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v) + ' %'; }
-
-  /* La règle météo : une variation du prix sur 7 jours devient un temps qu'il fait. */
-  function meteo(variation) {
-    if (variation <= -2) return { cle: 'beau', label: 'Grand beau', titre: 'Grand beau<br>sur les prix', bulle: 'Mea māmā !' };
-    if (variation < 2) return { cle: 'variable', label: 'Variable', titre: 'Temps variable<br>sur les prix', bulle: 'À surveiller' };
-    return { cle: 'hausse', label: 'Avis de hausse', titre: 'Avis de hausse<br>sur les prix', bulle: 'Aita māmā…' };
+  function aujourdhui() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
   }
 
-  function moinsCher(produit) {
-    return produit.magasins.slice().sort(function (a, b) { return a.prix - b.prix; })[0];
+  function dateLisible(iso) {
+    var p = String(iso).split('-');
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
   }
 
-  function plusCher(produit) {
-    return produit.magasins.slice().sort(function (a, b) { return b.prix - a.prix; })[0];
+  function remise(p) { return Math.round((1 - p.prixPromo / p.prixNormal) * 100); }
+
+  function commerce(id) {
+    return etat.donnees.commerces.filter(function (c) { return c.id === id; })[0];
   }
 
-  function trouver(liste, id) {
-    return liste.filter(function (x) { return x.id === id; })[0];
+  function abonnementActif(c) { return !!c && c.abonnement >= aujourdhui(); }
+
+  /* Toutes les promos connues : celles du fichier, moins les retirées, plus les ajoutées. */
+  function toutesLesPromos() {
+    return etat.donnees.promos
+      .filter(function (p) { return etat.retirees.indexOf(p.id) < 0; })
+      .concat(etat.ajoutees);
+  }
+
+  function promosDuCommerce(id) {
+    return toutesLesPromos().filter(function (p) { return p.commerce === id && p.fin >= aujourdhui(); });
+  }
+
+  /* Ce que le public voit : promos en cours, de commerces dont l'abonnement est à jour. */
+  function promosVisibles() {
+    return toutesLesPromos()
+      .filter(function (p) { return p.fin >= aujourdhui() && abonnementActif(commerce(p.commerce)); })
+      .sort(function (a, b) { return remise(b) - remise(a); });
   }
 
   function toast(message) {
@@ -82,13 +112,10 @@
       })
       .then(function (donnees) { etat.donnees = donnees; })
       .catch(function () {
-        // Hors ligne, ou page ouverte en double-cliquant sur index.html :
-        // on garde les derniers prix connus, sinon la copie de secours.
         enLigne = false;
         etat.donnees = etat.donnees || window.MAMA_SECOURS || null;
       })
       .then(function () {
-        // Laisse l'animation tourner au moins un instant, pour qu'on la voie.
         var reste = manuel ? Math.max(0, 700 - (Date.now() - debut)) : 0;
         return new Promise(function (ok) { setTimeout(ok, reste); });
       })
@@ -98,239 +125,245 @@
         afficher();
         if (manuel) {
           var heure = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-          toast(enLigne ? 'Prix mis à jour à ' + heure : 'Hors ligne : derniers prix connus');
+          toast(enLigne ? 'Promos mises à jour à ' + heure : 'Hors ligne : dernières promos connues');
         }
       });
   }
 
-  /* ---------- Écrans ---------- */
+  /* ---------- Briques d'affichage ---------- */
 
-  function vueMeteo() {
-    var d = etat.donnees;
-    var commune = trouver(d.communes, etat.commune) || d.communes[0];
-    var m = meteo(commune.variation);
+  function cartePromo(p, avecCommerce) {
+    var c = commerce(p.commerce);
+    var r = remise(p);
+    var ligne = avecCommerce && c ? '<small>' + esc(c.nom) + ' · ' + esc(c.commune) + '</small>' : '';
+    return '<a class="promo carte" href="#/commerce/' + esc(p.commerce) + '">' +
+      '<span class="remise' + (r >= 30 ? ' forte' : '') + '">−' + r + ' %</span>' +
+      '<span class="promo-texte"><strong>' + esc(p.produit) + '</strong>' +
+      ligne + '<small>jusqu\'au ' + dateLisible(p.fin) + '</small></span>' +
+      '<span class="promo-prix"><del>' + prix(p.prixNormal) + '</del><span class="chiffre">' + prix(p.prixPromo) + '</span></span></a>';
+  }
 
-    var options = d.communes.map(function (c) {
-      return '<option value="' + esc(c.id) + '"' + (c.id === commune.id ? ' selected' : '') + '>' + esc(c.nom) + '</option>';
+  function vide(dessin, titre, texte) {
+    return '<div class="vide">' + dessin + '<h2>' + titre + '</h2><p class="note">' + texte + '</p></div>';
+  }
+
+  /* ---------- Écrans publics ---------- */
+
+  function vuePromos() {
+    var visibles = promosVisibles();
+
+    var communes = [];
+    etat.donnees.commerces.forEach(function (c) {
+      if (abonnementActif(c) && communes.indexOf(c.commune) < 0) communes.push(c.commune);
+    });
+    communes.sort();
+
+    var options = '<option value="toutes">Toutes les communes</option>' + communes.map(function (n) {
+      return '<option value="' + esc(n) + '"' + (n === etat.commune ? ' selected' : '') + '>' + esc(n) + '</option>';
     }).join('');
 
-    var tries = d.produits.slice().sort(function (a, b) { return a.variation - b.variation; });
-    var bulletin = [tries[0], tries[Math.floor(tries.length / 2)], tries[tries.length - 1]];
+    // On ne propose que les secteurs qui ont au moins une promo en cours.
+    var secteurs = SECTEURS.filter(function (s) {
+      return visibles.some(function (p) { return commerce(p.commerce).secteur === s; });
+    });
+    if (secteurs.indexOf(etat.secteur) < 0) etat.secteur = 'tous';
 
-    var tuiles = bulletin.map(function (p) {
-      var pm = meteo(p.variation);
-      return '<a class="tuile carte fond-' + pm.cle + '" href="#/produit/' + esc(p.id) + '">' +
-        Icones.meteo(pm.cle, 44) +
-        '<span class="tuile-etat">' + pm.label + '</span>' +
-        '<span class="tuile-nom">' + esc(p.nom) + '</span>' +
-        '<span class="chiffre">' + pct(p.variation) + '</span></a>';
+    var puces = ['tous'].concat(secteurs).map(function (s) {
+      var actif = s === etat.secteur;
+      return '<button type="button" class="bouton puce' + (actif ? ' active' : '') + '" data-secteur="' + esc(s) +
+        '" aria-pressed="' + actif + '">' + (s === 'tous' ? 'Tout' : esc(s)) + '</button>';
     }).join('');
 
-    var plans = tries.slice(0, 3).map(function (p) {
-      var m1 = moinsCher(p);
-      return '<a class="ligne carte" href="#/produit/' + esc(p.id) + '">' +
-        '<span class="ligne-texte"><strong>' + esc(p.nom) + ' · ' + esc(p.unite) + '</strong>' +
-        '<small>' + esc(m1.nom) + ' · ' + esc(m1.lieu) + '</small></span>' +
-        '<span class="pastille fond-beau">' + prix(m1.prix) + '</span></a>';
-    }).join('');
+    var filtrees = visibles.filter(function (p) {
+      var c = commerce(p.commerce);
+      return (etat.commune === 'toutes' || c.commune === etat.commune) &&
+             (etat.secteur === 'tous' || c.secteur === etat.secteur);
+    });
+
+    var meilleure = visibles[0];
+    var liste = filtrees.length
+      ? filtrees.map(function (p) { return cartePromo(p, true); }).join('')
+      : vide(Icones.nuage(110), 'Pas de promo ici pour l\'instant', 'Essaie une autre commune ou un autre secteur.');
 
     return '' +
-      '<label class="choix-commune"><span>Ia ora na ! Ta commune :</span>' +
-      '<select id="commune" class="bouton">' + options + '</select></label>' +
-
-      '<section class="hero carte fond-' + m.cle + '">' +
+      '<section class="hero carte fond-beau">' +
         '<div class="hero-haut">' +
           '<div class="hero-texte">' +
-            '<h1 class="titre">' + m.titre + '</h1>' +
-            '<span class="bulle">' + m.bulle + '</span>' +
+            '<small class="surtitre">Ia ora na !</small>' +
+            '<h1 class="titre">' + visibles.length + ' promos<br>au fenua</h1>' +
+            '<span class="bulle">Mea māmā !</span>' +
           '</div>' +
-          '<div class="mascotte">' + Icones.meteo(m.cle, 128, true) + '</div>' +
+          '<div class="mascotte">' + Icones.soleil(128, true) + '</div>' +
         '</div>' +
         '<div class="niho"></div>' +
         '<div class="hero-bas">' +
-          '<div><small>Panier type · 20 produits</small><div class="chiffre grand">' + prix(commune.panier) + '</div></div>' +
-          '<span class="etiquette">' + pct(commune.variation) + ' en 7 jours</span>' +
+          (meilleure
+            ? '<div><small>La plus forte remise</small><div class="chiffre">' + esc(meilleure.produit) + '</div></div>' +
+              '<span class="etiquette">−' + remise(meilleure) + ' %</span>'
+            : '<div><small>Aucune promo en cours</small></div>') +
         '</div>' +
       '</section>' +
 
-      '<h2>Le bulletin du jour</h2>' +
-      '<div class="tuiles">' + tuiles + '</div>' +
+      '<div class="filtres">' +
+        '<label class="surtitre" for="commune">Où cherches-tu ?</label>' +
+        '<select id="commune" class="bouton">' + options + '</select>' +
+        '<div class="puces">' + puces + '</div>' +
+      '</div>' +
 
-      '<div class="rang"><h2>Bons plans</h2><a href="#/communes">Voir les communes</a></div>' +
-      '<div class="liste">' + plans + '</div>';
+      '<div class="liste">' + liste + '</div>';
   }
 
-  function vueCommunes() {
-    var d = etat.donnees;
-    var iles = [];
-    d.communes.forEach(function (c) { if (iles.indexOf(c.ile) < 0) iles.push(c.ile); });
-
-    var puces = iles.map(function (ile) {
-      return '<button type="button" class="bouton puce' + (ile === etat.ile ? ' active' : '') +
-        '" data-ile="' + esc(ile) + '" aria-pressed="' + (ile === etat.ile) + '">' + esc(ile) + '</button>';
-    }).join('');
-
-    var lignes = d.communes
-      .filter(function (c) { return c.ile === etat.ile; })
-      .sort(function (a, b) { return a.variation - b.variation; })
+  function vueCommerces() {
+    var lignes = etat.donnees.commerces
+      .filter(abonnementActif)
+      .sort(function (a, b) { return a.nom.localeCompare(b.nom, 'fr'); })
       .map(function (c) {
-        var m = meteo(c.variation);
-        return '<button type="button" class="ligne carte fond-' + m.cle + '" data-commune="' + esc(c.id) + '">' +
-          Icones.meteo(m.cle, 46) +
-          '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong>' +
-          '<small>' + m.label + ' · panier ' + prix(c.panier) + '</small></span>' +
-          '<span class="chiffre">' + pct(c.variation) + '</span></button>';
+        var n = promosDuCommerce(c.id).length;
+        return '<a class="ligne carte" href="#/commerce/' + esc(c.id) + '">' +
+          '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong><small>' + esc(c.secteur) + ' · ' + esc(c.commune) + '</small></span>' +
+          '<span class="pastille ' + (n ? 'fond-beau' : 'fond-variable') + '">' + n + ' promo' + (n > 1 ? 's' : '') + '</span></a>';
       }).join('');
 
     return '' +
-      '<div class="rang haut">' +
-        '<div><small class="surtitre">Te mau \'oire · les communes</small>' +
-        '<h1 class="titre">Où fait-il beau<br>sur le caddie ?</h1></div>' +
-        Icones.tiare(84, 'danse') +
-      '</div>' +
-      '<div class="puces">' + puces + '</div>' +
-      '<div class="niho"></div>' +
+      '<div class="rang haut"><div><small class="surtitre">Te mau fare toa · les commerces</small>' +
+      '<h1 class="titre">Les commerces<br>partenaires</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
+      '<div class="niho"></div><div style="height:16px"></div>' +
       '<div class="liste">' + lignes + '</div>' +
-      '<p class="note">Évolution du panier type sur 7 jours. Touche une commune pour voir sa météo.</p>';
+      '<p class="note">Tu tiens un commerce ? Ouvre l\'onglet « Mon commerce » pour publier tes promos.</p>';
   }
 
-  function vueProduit(id) {
-    var p = trouver(etat.donnees.produits, id);
-    if (!p) return vueIntrouvable();
-    var m = meteo(p.variation);
-    var m1 = moinsCher(p);
-    var max = plusCher(p).prix;
-
-    var magasins = p.magasins.slice().sort(function (a, b) { return a.prix - b.prix; }).map(function (s, i) {
-      var ecart = s.prix - m1.prix;
-      var ton = i === 0 ? 'beau' : (s.prix === max ? 'hausse' : 'variable');
-      return '<div class="magasin carte">' +
-        '<div class="rang"><strong>' + esc(s.nom) + ' · ' + esc(s.lieu) + '</strong><span class="chiffre">' + prix(s.prix) + '</span></div>' +
-        '<div class="jauge"><div class="jauge-barre plein-' + ton + '" style="width:' + Math.round(s.prix / max * 100) + '%"></div></div>' +
-        '<small>' + (ecart === 0 ? 'Le moins cher' : '+' + prix(ecart)) + ' · relevé ' + esc(s.releve) + '</small></div>';
-    }).join('');
-
-    var t = p.tendance;
-    var tMin = Math.min.apply(null, t);
-    var tMax = Math.max.apply(null, t);
-    var moyenne = t.reduce(function (a, b) { return a + b; }, 0) / t.length;
-    var barres = t.map(function (v, i) {
-      var h = tMax === tMin ? 70 : 40 + Math.round((v - tMin) / (tMax - tMin) * 60);
-      var ton = v > moyenne * 1.01 ? 'hausse' : (v < moyenne * 0.990 ? 'beau' : 'variable');
-      return '<div class="barre plein-' + ton + '" style="height:' + h + '%; animation-delay:' + (i * 60) + 'ms" title="' + prix(v) + '"></div>';
-    }).join('');
+  function vueCommerce(id) {
+    var c = commerce(id);
+    if (!c || !abonnementActif(c)) return vueIntrouvable();
+    var promos = promosDuCommerce(id).sort(function (a, b) { return remise(b) - remise(a); });
 
     return '' +
       '<div class="rang">' +
-        '<a class="bouton rond" href="#/" aria-label="Retour à la météo du jour">' +
+        '<a class="bouton rond" href="#/commerces" aria-label="Retour aux commerces">' +
         '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg></a>' +
-        '<span class="pastille bord fond-' + m.cle + '">' + m.label + ' · ' + pct(p.variation) + '</span>' +
+        '<span class="pastille bord fond-beau">' + esc(c.secteur) + '</span>' +
       '</div>' +
-      '<div class="rang haut">' +
-        '<div><h1 class="titre moyen">' + esc(p.nom) + ' · ' + esc(p.unite) + '</h1>' +
-        '<span class="etiquette prix-geant">' + prix(m1.prix) + '</span>' +
-        '<p class="note">au moins cher, chez ' + esc(m1.nom) + '</p></div>' +
-        '<div class="mascotte">' + Icones.meteo(m.cle, 96, true) + '</div>' +
-      '</div>' +
+      '<div class="rang haut"><div><h1 class="titre">' + esc(c.nom) + '</h1>' +
+      '<p class="note">' + esc(c.commune) + ' · ' + esc(c.adresse) + '<br>Tél. <a href="tel:' + esc(c.tel.replace(/\s/g, '')) + '">' + esc(c.tel) + '</a></p></div>' +
+      Icones.tiare(72, 'danse') + '</div>' +
       '<div class="niho"></div>' +
-      '<h2>Où l\'acheter aujourd\'hui</h2>' +
-      '<div class="liste">' + magasins + '</div>' +
-      '<h2>Tendance 7 jours</h2>' +
-      '<div class="barres">' + barres + '</div>' +
-      '<a class="bouton cta" href="#/signaler/' + esc(p.id) + '">Signaler un prix</a>';
+      '<h2>Ses promos du moment</h2>' +
+      '<div class="liste">' + (promos.length
+        ? promos.map(function (p) { return cartePromo(p, false); }).join('')
+        : vide(Icones.nuage(110), 'Pas de promo en ce moment', 'Reviens bientôt !')) + '</div>';
   }
 
-  function vuePanier() {
-    var produits = etat.donnees.produits;
-    var total = 0, totalCher = 0;
+  /* ---------- Espace commerçant ---------- */
 
-    var lignes = produits.map(function (p) {
-      var coche = etat.panier.indexOf(p.id) >= 0;
-      if (coche) { total += moinsCher(p).prix; totalCher += plusCher(p).prix; }
-      return '<label class="ligne carte' + (coche ? ' fond-beau' : '') + '">' +
-        '<input type="checkbox" data-panier="' + esc(p.id) + '"' + (coche ? ' checked' : '') + '>' +
-        '<span class="ligne-texte"><strong>' + esc(p.nom) + '</strong><small>' + esc(p.unite) + ' · ' + esc(moinsCher(p).nom) + '</small></span>' +
-        '<span class="chiffre">' + prix(moinsCher(p).prix) + '</span></label>';
-    }).join('');
-
+  function vueConnexion() {
+    var comptes = etat.donnees.commerces.map(function (c) { return '<code>' + esc(c.id) + '</code>'; }).join(', ');
     return '' +
-      '<div class="rang haut"><div><small class="surtitre">Tā\'u \'ete · mon panier</small>' +
-      '<h1 class="titre">Mon panier<br>au meilleur prix</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
-      '<section class="total carte fond-variable">' +
-        '<div><small>' + etat.panier.length + ' produit(s) cochés</small><div class="chiffre grand">' + prix(total) + '</div></div>' +
-        '<span class="etiquette">' + (totalCher > total ? prix(totalCher - total) + ' d\'économie' : 'Coche tes produits') + '</span>' +
-      '</section>' +
-      '<div class="liste">' + lignes + '</div>' +
-      '<p class="note">Total calculé au magasin le moins cher pour chaque produit.</p>';
-  }
-
-  function vueSignaler(id) {
-    var options = etat.donnees.produits.map(function (p) {
-      return '<option value="' + esc(p.id) + '"' + (p.id === id ? ' selected' : '') + '>' + esc(p.nom) + ' · ' + esc(p.unite) + '</option>';
-    }).join('');
-
-    var mes = etat.signalements.slice().reverse().map(function (s) {
-      var p = trouver(etat.donnees.produits, s.produit);
-      return '<div class="ligne carte"><span class="ligne-texte"><strong>' + esc(p ? p.nom : s.produit) + '</strong>' +
-        '<small>' + esc(s.magasin) + ' · ' + esc(s.date) + '</small></span><span class="chiffre">' + prix(s.prix) + '</span></div>';
-    }).join('');
-
-    return '' +
-      '<div class="rang haut"><div><small class="surtitre">Māuruuru !</small>' +
-      '<h1 class="titre">Signaler<br>un prix</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
-      '<form id="formulaire" class="formulaire carte">' +
-        '<label for="s-produit">Produit</label><select id="s-produit" name="produit" class="bouton">' + options + '</select>' +
-        '<label for="s-magasin">Magasin</label><input id="s-magasin" name="magasin" class="bouton" required maxlength="60" placeholder="Nom du magasin, commune">' +
-        '<label for="s-prix">Prix vu en rayon (F)</label><input id="s-prix" name="prix" class="bouton" type="number" inputmode="numeric" min="1" max="999999" required placeholder="1190">' +
-        '<button class="bouton cta" type="submit">Envoyer mon relevé</button>' +
+      '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
+      '<h1 class="titre">Mon<br>commerce</h1></div>' + Icones.tiare(84, 'danse') + '</div>' +
+      '<form id="connexion" class="formulaire carte" novalidate>' +
+        '<label for="c-id">Identifiant</label>' +
+        '<input id="c-id" name="identifiant" class="bouton" autocomplete="username" autocapitalize="none" required>' +
+        '<label for="c-mdp">Mot de passe</label>' +
+        '<input id="c-mdp" name="motdepasse" class="bouton" type="password" autocomplete="current-password" required>' +
+        '<p class="erreur" role="alert">' + esc(etat.erreur) + '</p>' +
+        '<button class="bouton cta" type="submit">Se connecter</button>' +
       '</form>' +
-      '<h2>Mes relevés</h2>' +
-      '<div class="liste">' + (mes || '<p class="note">Aucun relevé pour l\'instant. Le premier est pour toi !</p>') + '</div>' +
-      '<p class="note">Dans cette version de démonstration, les relevés restent sur ton téléphone.</p>';
+      '<div class="demo"><strong>Démonstration.</strong> Identifiants : ' + comptes +
+      '. Mot de passe : <code>' + MOT_DE_PASSE_DEMO + '</code>. Ce n\'est pas une vraie protection : la vraie version vérifiera le mot de passe sur un serveur.</div>';
+  }
+
+  function vueTableau() {
+    var c = commerce(etat.session);
+    if (!c) { etat.session = null; ecrire('session', null); return vueConnexion(); }
+
+    var actif = abonnementActif(c);
+    var promos = promosDuCommerce(c.id);
+    var plein = promos.length >= MAX_PROMOS;
+    var bloque = !actif || plein;
+
+    var lignes = promos.map(function (p) {
+      return '<div class="ligne carte">' +
+        '<span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
+        '<small>' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · jusqu\'au ' + dateLisible(p.fin) + '</small></span>' +
+        '<button type="button" class="bouton retirer" data-retirer="' + esc(p.id) + '">Retirer</button></div>';
+    }).join('');
+
+    var message = !actif
+      ? 'Ton abonnement est terminé : tes promos ne sont plus affichées. Renouvelle-le pour publier à nouveau.'
+      : (plein ? 'Tu as atteint la limite de ' + MAX_PROMOS + ' promos. Retires-en une pour en publier une autre.' : '');
+
+    return '' +
+      '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
+      '<h1 class="titre moyen">' + esc(c.nom) + '</h1><p class="note">' + esc(c.secteur) + ' · ' + esc(c.commune) + '</p></div>' +
+      '<div class="mascotte">' + (actif ? Icones.soleil(88, true) : Icones.orage(88)) + '</div></div>' +
+
+      '<section class="total carte ' + (actif ? 'fond-beau' : 'fond-hausse') + '">' +
+        '<div><small>' + (actif ? 'Abonnement actif jusqu\'au' : 'Abonnement terminé le') + '</small>' +
+        '<div class="chiffre">' + dateLisible(c.abonnement) + '</div></div>' +
+        '<span class="etiquette"><span class="compteur">' + promos.length + ' / ' + MAX_PROMOS + '</span> promos</span>' +
+      '</section>' +
+
+      '<h2>Mes promos en ligne</h2>' +
+      '<div class="liste">' + (lignes || '<p class="note">Aucune promo publiée pour l\'instant.</p>') + '</div>' +
+
+      '<h2>Publier une promo</h2>' +
+      '<form id="ajout" class="formulaire carte" novalidate>' +
+        (message ? '<p class="erreur">' + esc(message) + '</p>' : '') +
+        '<fieldset' + (bloque ? ' disabled' : '') + '>' +
+          '<label for="a-produit">Produit</label>' +
+          '<input id="a-produit" name="produit" class="bouton" maxlength="60" required placeholder="Nom du produit ou du service">' +
+          '<div class="deux">' +
+            '<div><label for="a-normal">Prix normal (F)</label><input id="a-normal" name="prixNormal" class="bouton" type="number" inputmode="numeric" min="1" max="999999" required></div>' +
+            '<div><label for="a-promo">Prix promo (F)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1" max="999999" required></div>' +
+          '</div>' +
+          '<label for="a-fin">Dernier jour de la promo</label>' +
+          '<input id="a-fin" name="fin" class="bouton" type="date" min="' + aujourdhui() + '" required>' +
+          '<p class="erreur" role="alert">' + (bloque ? '' : esc(etat.erreur)) + '</p>' +
+          '<button class="bouton cta" type="submit">Publier la promo</button>' +
+        '</fieldset>' +
+      '</form>' +
+      '<button type="button" class="lien-bouton" data-deconnexion="1">Se déconnecter</button>' +
+      '<div class="demo"><strong>Démonstration.</strong> Les promos publiées ici restent sur cet appareil. Dans la vraie version, elles seront envoyées au serveur et visibles par tout le monde.</div>';
   }
 
   function vueIntrouvable() {
     return '<div class="vide">' + Icones.nuage(120) + '<h1 class="titre moyen">Page introuvable</h1>' +
-      '<a class="bouton cta" href="#/">Retour à la météo</a></div>';
+      '<a class="bouton cta" href="#/">Retour aux promos</a></div>';
   }
 
   function vueErreur() {
-    return '<div class="vide">' + Icones.orage(120) + '<h1 class="titre moyen">Pas de prix pour l\'instant</h1>' +
+    return '<div class="vide">' + Icones.orage(120) + '<h1 class="titre moyen">Pas de promos pour l\'instant</h1>' +
       '<p class="note">Impossible de lire ' + esc(SOURCE) + '. Vérifie ta connexion puis touche « Mise à jour ».</p></div>';
   }
 
   /* ---------- Routeur ---------- */
 
   function afficher() {
-    var morceaux = (location.hash.replace(/^#\/?/, '') || 'meteo').split('/');
+    var morceaux = (location.hash.replace(/^#\/?/, '') || 'promos').split('/');
     var route = morceaux[0];
     var param = decodeURIComponent(morceaux[1] || '');
     var html;
 
     if (!etat.donnees) html = vueErreur();
-    else if (route === 'meteo') html = vueMeteo();
-    else if (route === 'communes') html = vueCommunes();
-    else if (route === 'produit') html = vueProduit(param);
-    else if (route === 'panier') html = vuePanier();
-    else if (route === 'signaler') html = vueSignaler(param);
+    else if (route === 'promos') html = vuePromos();
+    else if (route === 'commerces') html = vueCommerces();
+    else if (route === 'commerce') html = vueCommerce(param);
+    else if (route === 'espace') html = etat.session ? vueTableau() : vueConnexion();
     else html = vueIntrouvable();
 
     vue.innerHTML = html;
+    etat.erreur = '';
 
-    var onglet = route === 'produit' ? 'meteo' : route;
+    var onglet = route === 'commerce' ? 'commerces' : route;
     Array.prototype.forEach.call(document.querySelectorAll('.onglets a'), function (a) {
       if (a.getAttribute('data-onglet') === onglet) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     });
 
     var date = document.getElementById('maj-date');
-    if (etat.donnees && etat.donnees.maj) {
-      date.textContent = 'Prix relevés le ' + new Date(etat.donnees.maj).toLocaleString('fr-FR', {
-        day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
-      });
-    } else {
-      date.textContent = '';
-    }
+    date.textContent = etat.donnees && etat.donnees.maj
+      ? 'Promos à jour au ' + new Date(etat.donnees.maj).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+      : '';
   }
 
   /* ---------- Événements ---------- */
@@ -344,47 +377,87 @@
   boutonMaj.addEventListener('click', function () { charger(true); });
 
   vue.addEventListener('change', function (e) {
-    if (e.target.id === 'commune') {
-      etat.commune = e.target.value;
-      ecrire('commune', etat.commune);
-      afficher();
-    }
-    var idPanier = e.target.getAttribute('data-panier');
-    if (idPanier) {
-      var i = etat.panier.indexOf(idPanier);
-      if (i >= 0) etat.panier.splice(i, 1); else etat.panier.push(idPanier);
-      ecrire('panier', etat.panier);
-      afficher();
-    }
+    if (e.target.id === 'commune') { etat.commune = e.target.value; afficher(); }
   });
 
   vue.addEventListener('click', function (e) {
-    var ile = e.target.closest('[data-ile]');
-    if (ile) { etat.ile = ile.getAttribute('data-ile'); afficher(); return; }
+    var secteur = e.target.closest('[data-secteur]');
+    if (secteur) { etat.secteur = secteur.getAttribute('data-secteur'); afficher(); return; }
 
-    var commune = e.target.closest('[data-commune]');
-    if (commune) {
-      etat.commune = commune.getAttribute('data-commune');
-      ecrire('commune', etat.commune);
-      location.hash = '#/';
+    var retirer = e.target.closest('[data-retirer]');
+    if (retirer) {
+      var id = retirer.getAttribute('data-retirer');
+      var avant = etat.ajoutees.length;
+      etat.ajoutees = etat.ajoutees.filter(function (p) { return p.id !== id; });
+      if (etat.ajoutees.length === avant) etat.retirees.push(id);
+      ecrire('ajoutees', etat.ajoutees);
+      ecrire('retirees', etat.retirees);
+      afficher();
+      toast('Promo retirée');
+      return;
+    }
+
+    if (e.target.closest('[data-deconnexion]')) {
+      etat.session = null;
+      ecrire('session', null);
+      afficher();
+      toast('À bientôt !');
     }
   });
 
   vue.addEventListener('submit', function (e) {
-    if (e.target.id !== 'formulaire') return;
     e.preventDefault();
     var f = e.target;
-    var valeur = Math.round(Number(f.prix.value));
-    if (!f.magasin.value.trim() || !(valeur > 0)) return;
-    etat.signalements.push({
-      produit: f.produit.value,
-      magasin: f.magasin.value.trim(),
-      prix: valeur,
-      date: new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
-    });
-    ecrire('signalements', etat.signalements);
-    afficher();
-    toast('Māuruuru ! Relevé enregistré');
+
+    if (f.id === 'connexion') {
+      var id = f.identifiant.value.trim().toLowerCase();
+      // DÉMO : dans la vraie version, cette vérification se fait sur le serveur.
+      if (commerce(id) && f.motdepasse.value === MOT_DE_PASSE_DEMO) {
+        etat.session = id;
+        ecrire('session', id);
+        afficher();
+        toast('Ia ora na, ' + commerce(id).nom + ' !');
+      } else {
+        etat.erreur = 'Identifiant ou mot de passe incorrect.';
+        afficher();
+      }
+      return;
+    }
+
+    if (f.id === 'ajout') {
+      var c = commerce(etat.session);
+      var produit = f.produit.value.trim();
+      var normal = Math.round(Number(f.prixNormal.value));
+      var promo = Math.round(Number(f.prixPromo.value));
+      var fin = f.fin.value;
+
+      // Les mêmes règles devront être revérifiées par le serveur.
+      if (!abonnementActif(c)) etat.erreur = 'Abonnement terminé.';
+      else if (promosDuCommerce(c.id).length >= MAX_PROMOS) etat.erreur = 'Limite de ' + MAX_PROMOS + ' promos atteinte.';
+      else if (!produit) etat.erreur = 'Indique le nom du produit.';
+      else if (!(normal > 0) || !(promo > 0)) etat.erreur = 'Indique les deux prix.';
+      else if (promo >= normal) etat.erreur = 'Le prix promo doit être plus bas que le prix normal.';
+      else if (!fin || fin < aujourdhui()) etat.erreur = 'Choisis un dernier jour à partir d\'aujourd\'hui.';
+
+      if (etat.erreur) {
+        var zone = f.querySelector('fieldset .erreur');
+        if (zone) zone.textContent = etat.erreur;
+        etat.erreur = '';
+        return;
+      }
+
+      etat.ajoutees.push({
+        id: 'local-' + Date.now(),
+        commerce: c.id,
+        produit: produit,
+        prixNormal: normal,
+        prixPromo: promo,
+        fin: fin
+      });
+      ecrire('ajoutees', etat.ajoutees);
+      afficher();
+      toast('Promo publiée !');
+    }
   });
 
   /* ---------- Démarrage ---------- */

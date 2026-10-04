@@ -1,7 +1,7 @@
 {
-  "name": "Māmā · la météo des prix",
+  "name": "Māmā · les promos du fenua",
   "short_name": "Māmā",
-  "description": "La météo des prix en Polynésie française",
+  "description": "Les promotions des commerces de Polynésie française",
   "lang": "fr",
   "start_url": "./",
   "display": "standalone",

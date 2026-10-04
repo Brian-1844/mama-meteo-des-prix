@@ -1,4 +1,4 @@
-window.MAMA_SECOURS = {
+{
   "maj": "2026-10-03T18:30:00-10:00",
   "note": "Commerces et promotions fictifs, pour la démonstration.",
   "commerces": [
@@ -25,4 +25,4 @@ window.MAMA_SECOURS = {
     { "id": "p13", "commerce": "snack-g", "produit": "Poisson cru au lait de coco", "prixNormal": 1500, "prixPromo": 1200, "fin": "2026-12-06" },
     { "id": "p10", "commerce": "magasin-e", "produit": "Beurre 250 g", "prixNormal": 520, "prixPromo": 420, "fin": "2026-12-14" }
   ]
-};
+}
