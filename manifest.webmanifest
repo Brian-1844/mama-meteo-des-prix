@@ -1,13 +1,16 @@
 {
-  "name": "Māmā · les promos du fenua",
-  "short_name": "Māmā",
-  "description": "Les promotions des commerces de Polynésie française",
-  "lang": "fr",
+  "name": "Manu Ora",
+  "short_name": "Manu Ora",
+  "description": "Ton manu, tes émotions. Compagnon polynésien pour nommer ce que tu ressens et trouver de l'aide.",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#DFF8F4",
-  "theme_color": "#6FE7DA",
+  "background_color": "#EDF5F4",
+  "theme_color": "#1AA3B1",
+  "lang": "fr",
   "icons": [
-    { "src": "icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
   ]
 }

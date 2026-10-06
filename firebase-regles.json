@@ -1,0 +1,114 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "hearts": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$code.length == 8 && $code.matches(/^[A-Z0-9]+$/) && newData.hasChildren(['day','updated'])",
+        "name": {
+          ".validate": "newData.isString() && newData.val().length <= 20"
+        },
+        "day": {
+          ".validate": "newData.isString() && newData.val().length <= 12"
+        },
+        "updated": {
+          ".validate": "newData.isNumber()"
+        },
+        "entries": {
+          "$i": {
+            ".validate": "newData.hasChildren(['t','e'])",
+            "t": {
+              ".validate": "newData.isNumber()"
+            },
+            "e": {
+              ".validate": "newData.isString() && newData.val().length <= 12"
+            },
+            "$o": {
+              ".validate": false
+            }
+          }
+        },
+        "cfg": {
+          "$k": {
+            ".validate": "newData.isBoolean() || (newData.isString() && newData.val().length <= 12)"
+          }
+        },
+        "links": {
+          "$i": {
+            ".validate": "newData.isString() && newData.val().length == 8"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "visits": {
+      "$to": {
+        ".read": true,
+        "$from": {
+          ".write": true,
+          ".validate": "$to.length == 8 && $from.length == 8 && $from.matches(/^[A-Z0-9]+$/) && newData.hasChildren(['g','t'])",
+          "g": {
+            ".validate": "newData.isString() && newData.val().length <= 12"
+          },
+          "t": {
+            ".validate": "newData.isNumber()"
+          },
+          "name": {
+            ".validate": "newData.isString() && newData.val().length <= 20"
+          },
+          "p": {
+            ".validate": "newData.isString() && newData.val().length <= 12"
+          },
+          "$o": {
+            ".validate": false
+          }
+        }
+      }
+    },
+    "gardens": {
+      "$pair": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$pair.length == 17 && $pair.matches(/^[A-Z0-9]+_[A-Z0-9]+$/)",
+        "p": {
+          ".validate": "newData.isString() && newData.val().length <= 12"
+        },
+        "t": {
+          ".validate": "newData.isNumber()"
+        },
+        "by": {
+          ".validate": "newData.isString() && newData.val().length == 8"
+        },
+        "care": {
+          "$code": {
+            ".validate": "$code.length == 8",
+            "$day": {
+              ".validate": "newData.isBoolean() && $day.length <= 12"
+            }
+          }
+        },
+        "last": {
+          "p": {
+            ".validate": "newData.isString() && newData.val().length <= 12"
+          },
+          "t": {
+            ".validate": "newData.isNumber()"
+          },
+          "by": {
+            ".validate": "newData.isString() && newData.val().length == 8"
+          },
+          "$o": {
+            ".validate": false
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}
