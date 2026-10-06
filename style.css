@@ -375,3 +375,14 @@ div.promo { cursor: default; }
 .attente { padding: 40px 0; text-align: center; font-weight: 700; color: var(--gris); }
 .info { color: #0B6B61; font-weight: 700; font-size: 14px; min-height: 20px; }
 button:disabled { opacity: 0.6; cursor: progress; }
+
+/* ---------- Photos des promos ---------- */
+
+.photo-case { position: relative; flex-shrink: 0; width: 76px; height: 76px; }
+.vignette { display: block; width: 76px; height: 76px; object-fit: cover; border: 3px solid var(--encre); border-radius: 16px; background: var(--lagon); }
+.vignette.petite { width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0; }
+.remise.mini { position: absolute; top: -8px; left: -8px; width: 44px; height: 44px; font-size: 12px; }
+.photo-grande { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border: 3px solid var(--encre); border-radius: 20px; box-shadow: var(--ombre); background: var(--lagon); margin-bottom: 6px; }
+.apercu { width: 128px; height: 96px; object-fit: cover; border: 3px solid var(--encre); border-radius: 14px; margin-top: 6px; }
+.fichier { height: auto; padding: 9px 12px; border-radius: 16px; font-size: 14px; }
+.admin-promo .ligne-texte { flex: 1; }

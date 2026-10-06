@@ -9,7 +9,7 @@ Les pages sont hébergées sur GitHub Pages ; les comptes et les données sont d
 | Rôle | Ce qu'il peut faire |
 |---|---|
 | Public | Voir les promos, filtrer par commune et par secteur, signaler une promo |
-| Commerce | Se connecter, publier 4 promos au maximum (60 jours au plus chacune), les retirer |
+| Commerce | Se connecter, publier 4 promos au maximum (60 jours au plus chacune), avec une photo facultative, les retirer |
 | Administrateur | Créer un commerce, régler la fin d'abonnement, suspendre, supprimer une promo, traiter les signalements |
 
 Un commerce dont l'abonnement est terminé ou qui est suspendu n'apparaît plus dans l'app et ne peut plus publier.
@@ -59,6 +59,7 @@ manifest.webmanifest   installation sur l'écran d'accueil
 
 - `commerces/<uid>` : nom, secteur, commune, adresse, tel, actif, abonnement (date).
 - `promos/<uid>_1` à `promos/<uid>_4` : les quatre emplacements d'un commerce. C'est ce nommage qui impose la limite de 4.
+- `photos/<uid>_1` à `photos/<uid>_4` : la photo de la promo du même nom, réduite à 480 pixels et rangée sous forme de texte.
 - `admins/<uid>` : la fiche qui fait d'un compte un administrateur.
 - `signalements/<id>` : promo signalée, motif, date.
 
@@ -74,6 +75,7 @@ Pour passer de 4 à 3 promos : mettre `MAX_PROMOS = 3` dans `app.js` **et** reti
 
 - **Forfait gratuit** : environ 50 000 lectures par jour. Chaque ouverture de l'app lit tous les commerces et toutes les promos, puis garde le résultat 5 minutes. Avec quelques dizaines de commerces, c'est largement suffisant ; au-delà, il faudra optimiser.
 - **Suppression d'un compte** : l'app sait suspendre un commerce, pas supprimer son compte. La suppression se fait dans la console Firebase (Authentication, puis la fiche dans Firestore).
+- **Photos** : elles sont petites (480 pixels) pour rester dans le forfait gratuit. Pour des photos plus grandes, il faudra passer à Firebase Storage, qui demande le forfait payant à l'usage.
 - **Paiement** : l'abonnement est encaissé hors de l'app ; l'administrateur règle la date à la main.
 - **Signalements** : n'importe qui peut en envoyer, sans compte.
 - **En cas d'erreur `auth/unauthorized-domain`** : Authentication → Paramètres → Domaines autorisés → ajouter `brian-1844.github.io`.

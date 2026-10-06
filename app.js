@@ -30,6 +30,9 @@ const COMMUNES = [
   'Arue', 'Faa\'a', 'Hitia\'a O Te Ra', 'Mahina', 'Paea', 'Papara', 'Papeete', 'Pirae', 'Punaauia',
   'Taiarapu-Est', 'Taiarapu-Ouest', 'Teva I Uta', 'Moorea-Maiao', 'Bora-Bora', 'Huahine', 'Taha\'a', 'Uturoa'
 ];
+const PHOTO_COTE = 480;      // taille maximale d'une photo, en pixels
+const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+const photos = new Map();    // photos déjà lues pendant cette visite
 const MOTIFS = ['Prix différent en magasin', 'Produit indisponible', 'Promo terminée', 'Autre problème'];
 
 const app = initializeApp(firebaseConfig);
@@ -102,6 +105,7 @@ function messageErreur(e) {
   if (/email-already-in-use/.test(code)) return 'Un compte existe déjà avec cette adresse e-mail.';
   if (/weak-password/.test(code)) return 'Mot de passe trop court : 6 caractères au minimum.';
   if (/permission-denied/.test(code)) return 'Action refusée : droits insuffisants ou abonnement terminé.';
+  if (/photo/.test(code)) return 'Impossible d\'utiliser cette photo. Essaie avec une autre image.';
   if (/network-request-failed|unavailable/.test(code)) return 'Pas de connexion. Réessaie plus tard.';
   return 'Une erreur est survenue' + (code ? ' (' + code + ')' : '') + '.';
 }
@@ -164,7 +168,8 @@ async function charger(forcer, manuel) {
       const x = d.data();
       return {
         id: d.id, commerce: x.commerce, produit: x.produit || '',
-        prixNormal: x.prixNormal, prixPromo: x.prixPromo, fin: x.fin ? x.fin.toMillis() : 0
+        prixNormal: x.prixNormal, prixPromo: x.prixPromo, fin: x.fin ? x.fin.toMillis() : 0,
+        photo: x.photo === true
       };
     });
     etat.majLe = Date.now();
@@ -198,12 +203,84 @@ async function chargerSignalements() {
   }
 }
 
+/* ---------- Photos ----------
+   Chaque photo est réduite sur le téléphone du commerçant, puis rangée dans
+   photos/<identifiant de la promo>. Elle n'est lue que lorsqu'elle arrive à l'écran. */
+
+async function compresser(fichier) {
+  const url = URL.createObjectURL(fichier);
+  try {
+    const img = await new Promise((ok, ko) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = () => ko(Object.assign(new Error('photo'), { code: 'photo-illisible' }));
+      i.src = url;
+    });
+    const k = Math.min(1, PHOTO_COTE / Math.max(img.naturalWidth, img.naturalHeight));
+    const toile = document.createElement('canvas');
+    toile.width = Math.max(1, Math.round(img.naturalWidth * k));
+    toile.height = Math.max(1, Math.round(img.naturalHeight * k));
+    const ctx = toile.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, toile.width, toile.height);
+    ctx.drawImage(img, 0, 0, toile.width, toile.height);
+    let qualite = 0.72;
+    let image = toile.toDataURL('image/jpeg', qualite);
+    while (image.length > 120000 && qualite > 0.36) {
+      qualite -= 0.12;
+      image = toile.toDataURL('image/jpeg', qualite);
+    }
+    if (image.length > 190000 || image.indexOf('data:image/jpeg;base64,') !== 0) {
+      throw Object.assign(new Error('photo'), { code: 'photo-trop-lourde' });
+    }
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const balisePhoto = (p, classe) =>
+  '<img class="' + classe + '" alt="Photo : ' + esc(p.produit) + '" data-photo="' + esc(p.id) + '" src="' + PIXEL + '">';
+
+async function lirePhoto(id) {
+  if (!photos.has(id)) {
+    photos.set(id, getDoc(doc(db, 'photos', id)).then((d) => (d.exists() ? d.data().image : null)).catch(() => null));
+  }
+  return photos.get(id);
+}
+
+const guetteur = 'IntersectionObserver' in window ? new IntersectionObserver((entrees) => {
+  entrees.forEach((e) => {
+    if (!e.isIntersecting) return;
+    guetteur.unobserve(e.target);
+    remplirPhoto(e.target);
+  });
+}, { rootMargin: '200px' }) : null;
+
+async function remplirPhoto(img) {
+  const image = await lirePhoto(img.getAttribute('data-photo'));
+  if (image && image.indexOf('data:image/jpeg;base64,') === 0) img.src = image;
+  else img.hidden = true;
+}
+
+function chargerPhotos() {
+  vue.querySelectorAll('img[data-photo]').forEach((img) => (guetteur ? guetteur.observe(img) : remplirPhoto(img)));
+}
+
+async function supprimerPromo(id) {
+  const p = (etat.promos || []).find((x) => x.id === id);
+  await deleteDoc(doc(db, 'promos', id));
+  if (p && p.photo) await deleteDoc(doc(db, 'photos', id)).catch((e) => console.error(e));
+  photos.delete(id);
+}
+
 /* ---------- Briques d'affichage ---------- */
 
-function interieurPromo(p, avecCommerce) {
+function interieurPromo(p, avecCommerce, sansVignette) {
   const c = commerce(p.commerce);
   const r = remise(p);
-  return '<span class="remise' + (r >= 30 ? ' forte' : '') + '">−' + r + ' %</span>' +
+  const pastille = '<span class="remise' + (r >= 30 ? ' forte' : '') + (p.photo && !sansVignette ? ' mini' : '') + '">−' + r + ' %</span>';
+  return (p.photo && !sansVignette ? '<span class="photo-case">' + balisePhoto(p, 'vignette') + pastille + '</span>' : pastille) +
     '<span class="promo-texte"><strong>' + esc(p.produit) + '</strong>' +
     (avecCommerce && c ? '<small>' + esc(c.nom) + ' · ' + esc(c.commune) + '</small>' : '') +
     '<small>jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
@@ -293,7 +370,8 @@ function vueCommerce(id) {
   const motifs = MOTIFS.map((m) => '<option>' + esc(m) + '</option>').join('');
 
   const cartes = promos.map((p) =>
-    '<div class="promo-bloc"><div class="promo carte">' + interieurPromo(p, false) + '</div>' +
+    '<div class="promo-bloc">' + (p.photo ? balisePhoto(p, 'photo-grande') : '') +
+    '<div class="promo carte">' + interieurPromo(p, false, true) + '</div>' +
     '<details class="signaler"><summary>Signaler un problème</summary>' +
     '<form data-signaler="' + esc(p.id) + '"><select name="motif" class="bouton" aria-label="Motif du signalement">' + motifs + '</select>' +
     '<button class="bouton" type="submit">Envoyer</button></form></details></div>').join('');
@@ -356,7 +434,8 @@ function vueTableau() {
   const bloque = !actif || plein;
 
   const lignes = promos.map((p) =>
-    '<div class="ligne carte"><span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
+    '<div class="ligne carte">' + (p.photo ? balisePhoto(p, 'vignette petite') : '') +
+    '<span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
     '<small>' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
     '<button type="button" class="bouton retirer" data-retirer="' + esc(p.id) + '">Retirer</button></div>').join('');
 
@@ -393,6 +472,9 @@ function vueTableau() {
         '</div>' +
         '<label for="a-fin">Dernier jour de la promo (' + MAX_JOURS + ' jours au plus)</label>' +
         '<input id="a-fin" name="fin" class="bouton" type="date" min="' + auj + '" max="' + max + '" required>' +
+        '<label for="a-photo">Photo (facultative)</label>' +
+        '<input id="a-photo" name="photo" class="bouton fichier" type="file" accept="image/*">' +
+        '<img id="a-apercu" class="apercu" alt="Aperçu de la photo" hidden>' +
         '<p class="erreur" role="alert"></p>' +
         '<button class="bouton cta" type="submit">Publier la promo</button>' +
       '</fieldset>' +
@@ -417,7 +499,7 @@ function vueAdmin() {
     const statut = !c.actif ? ['fond-hausse', 'Suspendu']
       : (c.abonnement > Date.now() ? ['fond-beau', 'Actif'] : ['fond-variable', 'Abonnement terminé']);
     const promos = (etat.promos || []).filter((p) => p.commerce === c.id).map((p) =>
-      '<div class="admin-promo"><span>' + esc(p.produit) + ' · ' + prix(p.prixPromo) + (enCours(p) ? '' : ' · terminée') + '</span>' +
+      '<div class="admin-promo">' + (p.photo ? balisePhoto(p, 'vignette petite') : '') + '<span class="ligne-texte">' + esc(p.produit) + ' · ' + prix(p.prixPromo) + (enCours(p) ? '' : ' · terminée') + '</span>' +
       '<button type="button" class="bouton retirer danger" data-admin-supprimer="' + esc(p.id) + '">Supprimer</button></div>').join('');
     return '<div class="admin-commerce carte">' +
       '<div class="rang"><strong>' + esc(c.nom) + '</strong><span class="pastille bord ' + statut[0] + '">' + statut[1] + '</span></div>' +
@@ -489,6 +571,7 @@ function afficher() {
   else html = vueIntrouvable();
 
   vue.innerHTML = html;
+  chargerPhotos();
 
   const onglet = route === 'commerce' ? 'commerces' : route;
   document.querySelectorAll('.onglets a').forEach((a) => {
@@ -516,6 +599,16 @@ boutonMaj.addEventListener('click', async () => {
 
 vue.addEventListener('change', (e) => {
   if (e.target.id === 'commune') { etat.commune = e.target.value; afficher(); }
+
+  if (e.target.id === 'a-photo') {
+    const apercu = document.getElementById('a-apercu');
+    const fichier = e.target.files[0];
+    apercu.hidden = true;
+    if (!fichier) return;
+    compresser(fichier)
+      .then((image) => { apercu.src = image; apercu.hidden = false; })
+      .catch((err) => { e.target.value = ''; toast(messageErreur(err)); });
+  }
 });
 
 vue.addEventListener('click', (e) => {
@@ -541,7 +634,7 @@ vue.addEventListener('click', (e) => {
 
   if ((b = cible('[data-retirer]'))) {
     action(b, async () => {
-      await deleteDoc(doc(db, 'promos', b.getAttribute('data-retirer')));
+      await supprimerPromo(b.getAttribute('data-retirer'));
       await charger(true);
       toast('Promo retirée');
     });
@@ -551,7 +644,7 @@ vue.addEventListener('click', (e) => {
   if ((b = cible('[data-admin-supprimer]'))) {
     if (!confirm('Supprimer cette promo ?')) return;
     action(b, async () => {
-      await deleteDoc(doc(db, 'promos', b.getAttribute('data-admin-supprimer')));
+      await supprimerPromo(b.getAttribute('data-admin-supprimer'));
       await charger(true);
       toast('Promo supprimée');
     });
@@ -573,7 +666,7 @@ vue.addEventListener('click', (e) => {
     const idSignalement = b.getAttribute('data-sig-ignorer') || b.getAttribute('data-sig-supprimer');
     const idPromo = b.getAttribute('data-promo');
     action(b, async () => {
-      if (idPromo) await deleteDoc(doc(db, 'promos', idPromo));
+      if (idPromo) await supprimerPromo(idPromo);
       await deleteDoc(doc(db, 'signalements', idSignalement));
       await chargerSignalements();
       await charger(true);
@@ -618,9 +711,19 @@ vue.addEventListener('submit', (e) => {
     if (finDeJournee(fin).getTime() > Date.now() + (MAX_JOURS + 1) * 86400000) return refuser('La promo ne peut pas durer plus de ' + MAX_JOURS + ' jours.');
 
     envoyer(async () => {
+      const fichier = f.photo.files[0];
+      const image = fichier ? await compresser(fichier) : null;
+      const ancienne = etat.promos.find((x) => x.id === emplacement);
+      // La photo d'abord : une promo marquée « avec photo » a ainsi toujours sa photo.
+      if (image) {
+        await setDoc(doc(db, 'photos', emplacement), { commerce: uid, image: image, cree: serverTimestamp() });
+      } else if (ancienne && ancienne.photo) {
+        await deleteDoc(doc(db, 'photos', emplacement)).catch((e2) => console.error(e2));
+      }
+      photos.delete(emplacement);
       await setDoc(doc(db, 'promos', emplacement), {
         commerce: uid, produit: produit, prixNormal: normal, prixPromo: promo,
-        fin: Timestamp.fromDate(finDeJournee(fin)), cree: serverTimestamp()
+        fin: Timestamp.fromDate(finDeJournee(fin)), photo: !!image, cree: serverTimestamp()
       });
       await charger(true);
       toast('Promo publiée !');
