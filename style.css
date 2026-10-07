@@ -386,3 +386,20 @@ button:disabled { opacity: 0.6; cursor: progress; }
 .apercu { width: 128px; height: 96px; object-fit: cover; border: 3px solid var(--encre); border-radius: 14px; margin-top: 6px; }
 .fichier { height: auto; padding: 9px 12px; border-radius: 16px; font-size: 14px; }
 .admin-promo .ligne-texte { flex: 1; }
+
+/* ---------- Arrivages, partage, contacts ---------- */
+
+.remise.arrivage { background: var(--turquoise); font-size: 12px; line-height: 1.05; text-align: center; padding: 0 4px; }
+.remise.arrivage.mini { font-size: 10px; }
+.contacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.contact { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; box-shadow: 3px 3px 0 var(--encre); }
+.contact:hover { color: var(--encre); }
+.contact.messenger { background: var(--beau); }
+.actions-promo { justify-content: flex-start; gap: 12px; flex-wrap: wrap; }
+.partager { display: inline-flex; align-items: center; gap: 6px; }
+.signaler { flex: 1; min-width: 180px; }
+.type-choix { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 6px; }
+.type-choix .bouton { padding: 0 8px; font-size: 14px; }
+.type-choix .active { background: var(--jaune); box-shadow: 3px 3px 0 var(--encre); }
+.case { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 14px; margin-top: 6px; }
+.case input { width: 22px; height: 22px; accent-color: var(--encre); }

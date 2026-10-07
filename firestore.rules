@@ -9,24 +9,43 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
+    // Un compte réel (e-mail), pas un visiteur anonyme.
+    function estCompte() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     // Le commerce existe, n'est pas suspendu, et son abonnement est en cours.
     function commerceValide(uid) {
       let c = get(/databases/$(database)/documents/commerces/$(uid)).data;
       return c.actif == true && c.abonnement > request.time;
     }
 
-    // Contenu d'une promo : champs, tailles, prix promo plus bas, 62 jours au plus.
-    function promoValide() {
+    // Les 4 emplacements d'un commerce : <uid>_1 à <uid>_4.
+    function emplacementDe(id, uid) {
+      return id in [uid + '_1', uid + '_2', uid + '_3', uid + '_4'];
+    }
+
+    // Contenu d'une annonce : champs, tailles, 62 jours au plus.
+    // Une « promo » a un prix normal et un prix promo plus bas ;
+    // un « arrivage » n'a pas de prix normal et son prix est facultatif.
+    function annonceValide() {
       let p = request.resource.data;
-      return p.keys().hasOnly(['commerce', 'produit', 'prixNormal', 'prixPromo', 'fin', 'cree', 'photo'])
-        && p.keys().hasAll(['commerce', 'produit', 'prixNormal', 'prixPromo', 'fin', 'cree'])
+      let base = p.keys().hasOnly(['commerce', 'produit', 'type', 'prixNormal', 'prixPromo', 'fin', 'cree', 'photo', 'epuisement'])
+        && p.keys().hasAll(['commerce', 'produit', 'type', 'fin', 'cree'])
         && p.produit is string && p.produit.size() > 0 && p.produit.size() <= 60
-        && p.prixNormal is int && p.prixPromo is int
-        && p.prixPromo > 0 && p.prixPromo < p.prixNormal && p.prixNormal <= 99999999
+        && p.type in ['promo', 'arrivage']
         && p.fin is timestamp && p.fin > request.time
         && p.fin < request.time + duration.value(62, 'd')
+        && p.cree == request.time
         && (!('photo' in p) || p.photo is bool)
-        && p.cree == request.time;
+        && (!('epuisement' in p) || p.epuisement is bool);
+      let promo = p.type == 'promo'
+        && p.prixNormal is int && p.prixPromo is int
+        && p.prixPromo > 0 && p.prixPromo < p.prixNormal && p.prixNormal <= 99999999;
+      let arrivage = p.type == 'arrivage'
+        && !('prixNormal' in p)
+        && (!('prixPromo' in p) || (p.prixPromo is int && p.prixPromo > 0 && p.prixPromo <= 99999999));
+      return base && (promo || arrivage);
     }
 
     // Les fiches admin ne se créent que depuis la console Firebase.
@@ -41,25 +60,23 @@ service cloud.firestore {
       allow write: if estAdmin();
     }
 
-    // Promos : 4 emplacements par commerce, nommés <uid>_1 à <uid>_4.
+    // Annonces (promos et arrivages) : 4 emplacements par commerce.
     match /promos/{id} {
       allow read: if true;
-      allow create, update: if request.auth != null
-        && id in [request.auth.uid + '_1', request.auth.uid + '_2',
-                  request.auth.uid + '_3', request.auth.uid + '_4']
+      allow create, update: if estCompte()
+        && emplacementDe(id, request.auth.uid)
         && request.resource.data.commerce == request.auth.uid
         && commerceValide(request.auth.uid)
-        && promoValide();
+        && annonceValide();
       allow delete: if estAdmin()
-        || (request.auth != null && resource.data.commerce == request.auth.uid);
+        || (estCompte() && resource.data.commerce == request.auth.uid);
     }
 
-    // Photos : une par promo, même identifiant que la promo. Petite image JPEG en texte.
+    // Photos : une par annonce, même identifiant. Petite image JPEG en texte.
     match /photos/{id} {
       allow read: if true;
-      allow create, update: if request.auth != null
-        && id in [request.auth.uid + '_1', request.auth.uid + '_2',
-                  request.auth.uid + '_3', request.auth.uid + '_4']
+      allow create, update: if estCompte()
+        && emplacementDe(id, request.auth.uid)
         && request.resource.data.keys().hasOnly(['commerce', 'image', 'cree'])
         && request.resource.data.keys().hasAll(['commerce', 'image', 'cree'])
         && request.resource.data.commerce == request.auth.uid
@@ -70,12 +87,15 @@ service cloud.firestore {
         && request.resource.data.cree == request.time
         && commerceValide(request.auth.uid);
       allow delete: if estAdmin()
-        || (request.auth != null && resource.data.commerce == request.auth.uid);
+        || (estCompte() && resource.data.commerce == request.auth.uid);
     }
 
-    // Signalements : tout le monde peut en envoyer, seul l'administrateur les lit.
+    // Signalements : un par appareil (connexion anonyme) et par annonce,
+    // l'identifiant étant <annonce>_<uid>. Seul l'administrateur les lit et les supprime.
     match /signalements/{id} {
-      allow create: if request.resource.data.keys().hasOnly(['promo', 'commerce', 'produit', 'motif', 'cree'])
+      allow create: if request.auth != null
+        && id == request.resource.data.promo + '_' + request.auth.uid
+        && request.resource.data.keys().hasOnly(['promo', 'commerce', 'produit', 'motif', 'cree'])
         && request.resource.data.keys().hasAll(['promo', 'commerce', 'produit', 'motif', 'cree'])
         && request.resource.data.promo is string && request.resource.data.promo.size() <= 80
         && request.resource.data.commerce is string && request.resource.data.commerce.size() <= 60

@@ -1,34 +1,36 @@
 /* Māmā — les promos du fenua. Version en ligne, branchée sur Firebase.
 
    Trois rôles :
-   - le public lit les promos, sans compte ;
-   - un commerce se connecte et gère ses 4 promos ;
+   - le public lit les promos, sans compte, et peut signaler un problème ;
+   - un commerce se connecte et gère ses 4 annonces (promos ou arrivages) ;
    - l'administrateur crée les commerces, règle les abonnements, modère.
 
-   Les contrôles faits ici (4 promos, abonnement, prix) sont là pour le confort.
+   Les contrôles faits ici (4 annonces, abonnement, prix) sont là pour le confort.
    La vraie barrière, ce sont les règles de sécurité : fichier firestore.rules. */
 
 import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signInAnonymously, signOut,
   sendPasswordResetEmail, createUserWithEmailAndPassword
 } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
+  getFirestore, collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc,
   serverTimestamp, Timestamp
 } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
 import { firebaseConfig } from './config.js';
 
 const MAX_PROMOS = 4;        // doit correspondre aux emplacements _1 à _4 des règles
-const MAX_JOURS = 60;        // durée maximale d'une promo
+const MAX_JOURS = 60;        // durée maximale d'une annonce
 const CACHE_MINUTES = 5;     // évite de relire la base à chaque ouverture
 const SECTEURS = [
   'Alimentation', 'Maison et bricolage', 'Auto, moto et vélo', 'Sport et loisirs',
   'Mode et beauté', 'High-tech et électroménager', 'Restaurants et snacks', 'Services'
 ];
-const COMMUNES = [
-  'Arue', 'Faa\'a', 'Hitia\'a O Te Ra', 'Mahina', 'Paea', 'Papara', 'Papeete', 'Pirae', 'Punaauia',
-  'Taiarapu-Est', 'Taiarapu-Ouest', 'Teva I Uta', 'Moorea-Maiao', 'Bora-Bora', 'Huahine', 'Taha\'a', 'Uturoa'
+// Zones telles que les gens les nomment : le tour de Tahiti, puis Moorea, puis les îles.
+const ZONES = [
+  'Papeete', 'Pirae', 'Arue', 'Mahina', 'Côte est (Papenoo, Tiarei, Hitia\'a)', 'Taravao et presqu\'île',
+  'Papara', 'Paea', 'Punaauia', 'Faa\'a', 'Moorea',
+  'Bora Bora', 'Raiatea', 'Taha\'a', 'Huahine', 'Maupiti', 'Tuamotu', 'Marquises', 'Australes'
 ];
 const PHOTO_COTE = 480;      // taille maximale d'une photo, en pixels
 const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
@@ -48,10 +50,11 @@ const etat = {
   promos: null,
   majLe: 0,
   horsLigne: false,
-  commune: 'toutes',
+  zone: 'toutes',
   secteur: 'tous',
+  typeAjout: 'promo',
   authPret: false,
-  utilisateur: null,
+  utilisateur: null,       // compte connecté (jamais un visiteur anonyme)
   estAdmin: false,
   signalements: []
 };
@@ -64,7 +67,8 @@ function esc(texte) {
 }
 
 const prix = (n) => Number(n).toLocaleString('fr-FR') + ' F';
-const remise = (p) => Math.round((1 - p.prixPromo / p.prixNormal) * 100);
+const estPromo = (p) => p.type !== 'arrivage';
+const remise = (p) => (estPromo(p) && p.prixNormal ? Math.round((1 - p.prixPromo / p.prixNormal) * 100) : 0);
 
 function iso(ms) {
   const d = new Date(ms);
@@ -84,10 +88,24 @@ const abonnementActif = (c) => !!c && c.actif && c.abonnement > Date.now();
 const enCours = (p) => p.fin > Date.now();
 const promosDe = (id) => (etat.promos || []).filter((p) => p.commerce === id && enCours(p));
 
-function promosVisibles() {
-  return (etat.promos || [])
-    .filter((p) => enCours(p) && abonnementActif(commerce(p.commerce)))
-    .sort((a, b) => remise(b) - remise(a));
+/* « PK 12,5 côté montagne » : le repère que tout le monde utilise à Tahiti. */
+function repere(c) {
+  return c.pk ? 'PK ' + c.pk + (c.cote ? ' côté ' + c.cote : '') : '';
+}
+
+function lieu(c) {
+  return [repere(c), c.zone].filter(Boolean).join(' · ');
+}
+
+const echeance = (p) => (p.epuisement ? 'jusqu\'à épuisement' : 'jusqu\'au ' + dateCourte(p.fin));
+
+/* Promos par remise décroissante, arrivages du plus récent au plus ancien. */
+function visibles() {
+  const tous = (etat.promos || []).filter((p) => enCours(p) && abonnementActif(commerce(p.commerce)));
+  return {
+    promos: tous.filter(estPromo).sort((a, b) => remise(b) - remise(a)),
+    arrivages: tous.filter((p) => !estPromo(p)).sort((a, b) => b.cree - a.cree)
+  };
 }
 
 function toast(message) {
@@ -104,6 +122,7 @@ function messageErreur(e) {
   if (/too-many-requests/.test(code)) return 'Trop de tentatives. Réessaie dans quelques minutes.';
   if (/email-already-in-use/.test(code)) return 'Un compte existe déjà avec cette adresse e-mail.';
   if (/weak-password/.test(code)) return 'Mot de passe trop court : 6 caractères au minimum.';
+  if (/admin-restricted-operation|operation-not-allowed/.test(code)) return 'Fonction non activée sur le serveur. Contacte l\'équipe Māmā.';
   if (/permission-denied/.test(code)) return 'Action refusée : droits insuffisants ou abonnement terminé.';
   if (/photo/.test(code)) return 'Impossible d\'utiliser cette photo. Essaie avec une autre image.';
   if (/network-request-failed|unavailable/.test(code)) return 'Pas de connexion. Réessaie plus tard.';
@@ -121,6 +140,24 @@ async function action(bouton, travail) {
   } finally {
     if (bouton && bouton.isConnected) bouton.disabled = false;
   }
+}
+
+/* ---------- Partage (Facebook, Messenger, WhatsApp… via la feuille de partage du téléphone) ---------- */
+
+const urlCommerce = (id) => location.origin + location.pathname + '#/commerce/' + encodeURIComponent(id);
+
+function textePartage(p) {
+  const c = commerce(p.commerce) || {};
+  const ou = ' chez ' + c.nom + (c.zone ? ' (' + c.zone + ')' : '');
+  if (estPromo(p)) return p.produit + ' à ' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ou + ', ' + echeance(p) + '.';
+  return 'Arrivage : ' + p.produit + (p.prixPromo ? ' à ' + prix(p.prixPromo) : '') + ou + ', ' + echeance(p) + '.';
+}
+
+async function partager(titre, texte, url) {
+  if (navigator.share) {
+    try { await navigator.share({ title: titre, text: texte, url: url }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  window.open('https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(url) + '&quote=' + encodeURIComponent(texte), '_blank', 'noopener');
 }
 
 /* ---------- Lecture de la base et bouton « Mise à jour » ---------- */
@@ -159,16 +196,21 @@ async function charger(forcer, manuel) {
     etat.commerces = c.docs.map((d) => {
       const x = d.data();
       return {
-        id: d.id, nom: x.nom || '', secteur: x.secteur || '', commune: x.commune || '',
-        adresse: x.adresse || '', tel: x.tel || '', actif: x.actif === true,
-        abonnement: x.abonnement ? x.abonnement.toMillis() : 0
+        id: d.id, nom: x.nom || '', secteur: x.secteur || '',
+        zone: x.zone || x.commune || '', pk: x.pk || '', cote: x.cote || '',
+        adresse: x.adresse || '', tel: x.tel || '', facebook: x.facebook || '',
+        actif: x.actif === true, abonnement: x.abonnement ? x.abonnement.toMillis() : 0
       };
     });
     etat.promos = p.docs.map((d) => {
       const x = d.data();
       return {
         id: d.id, commerce: x.commerce, produit: x.produit || '',
-        prixNormal: x.prixNormal, prixPromo: x.prixPromo, fin: x.fin ? x.fin.toMillis() : 0,
+        type: x.type === 'arrivage' ? 'arrivage' : 'promo',
+        prixNormal: typeof x.prixNormal === 'number' ? x.prixNormal : null,
+        prixPromo: typeof x.prixPromo === 'number' ? x.prixPromo : null,
+        epuisement: x.epuisement === true,
+        fin: x.fin ? x.fin.toMillis() : 0, cree: x.cree ? x.cree.toMillis() : 0,
         photo: x.photo === true
       };
     });
@@ -276,18 +318,32 @@ async function supprimerPromo(id) {
 
 /* ---------- Briques d'affichage ---------- */
 
+function pastille(p, mini) {
+  if (estPromo(p)) {
+    const r = remise(p);
+    return '<span class="remise' + (r >= 30 ? ' forte' : '') + (mini ? ' mini' : '') + '">−' + r + ' %</span>';
+  }
+  return '<span class="remise arrivage' + (mini ? ' mini' : '') + '">Arrivage</span>';
+}
+
+function blocPrix(p) {
+  if (estPromo(p)) return '<span class="promo-prix"><del>' + prix(p.prixNormal) + '</del><span class="chiffre">' + prix(p.prixPromo) + '</span></span>';
+  if (p.prixPromo) return '<span class="promo-prix"><span class="chiffre">' + prix(p.prixPromo) + '</span></span>';
+  return '';
+}
+
 function interieurPromo(p, avecCommerce, sansVignette) {
   const c = commerce(p.commerce);
-  const r = remise(p);
-  const pastille = '<span class="remise' + (r >= 30 ? ' forte' : '') + (p.photo && !sansVignette ? ' mini' : '') + '">−' + r + ' %</span>';
-  return (p.photo && !sansVignette ? '<span class="photo-case">' + balisePhoto(p, 'vignette') + pastille + '</span>' : pastille) +
+  const avecPhoto = p.photo && !sansVignette;
+  return (avecPhoto ? '<span class="photo-case">' + balisePhoto(p, 'vignette') + pastille(p, true) + '</span>' : pastille(p, false)) +
     '<span class="promo-texte"><strong>' + esc(p.produit) + '</strong>' +
-    (avecCommerce && c ? '<small>' + esc(c.nom) + ' · ' + esc(c.commune) + '</small>' : '') +
-    '<small>jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
-    '<span class="promo-prix"><del>' + prix(p.prixNormal) + '</del><span class="chiffre">' + prix(p.prixPromo) + '</span></span>';
+    (avecCommerce && c ? '<small>' + esc(c.nom) + (c.zone ? ' · ' + esc(c.zone) : '') + '</small>' : '') +
+    '<small>' + echeance(p) + '</small></span>' + blocPrix(p);
 }
 
 const cartePromo = (p) => '<a class="promo carte" href="#/commerce/' + esc(p.commerce) + '">' + interieurPromo(p, true) + '</a>';
+
+const iconePartage = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.400" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.600 13.500l6.800 4M15.400 6.500l-6.800 4"></path></svg>';
 
 function vide(dessin, titre, texte) {
   return '<div class="vide">' + dessin + '<h2>' + titre + '</h2><p class="note">' + texte + '</p></div>';
@@ -299,14 +355,15 @@ const enTete = (surtitre, titre, dessin) =>
 /* ---------- Écrans publics ---------- */
 
 function vuePromos() {
-  const visibles = promosVisibles();
-  const communes = [...new Set(etat.commerces.filter(abonnementActif).map((c) => c.commune))].sort();
-  const secteurs = SECTEURS.filter((s) => visibles.some((p) => commerce(p.commerce).secteur === s));
+  const v = visibles();
+  const tous = v.promos.concat(v.arrivages);
+  const zones = ZONES.filter((z) => etat.commerces.some((c) => abonnementActif(c) && c.zone === z));
+  const secteurs = SECTEURS.filter((s) => tous.some((p) => commerce(p.commerce).secteur === s));
   if (!secteurs.includes(etat.secteur)) etat.secteur = 'tous';
-  if (!communes.includes(etat.commune)) etat.commune = 'toutes';
+  if (!zones.includes(etat.zone)) etat.zone = 'toutes';
 
-  const options = '<option value="toutes">Toutes les communes</option>' + communes.map((n) =>
-    '<option value="' + esc(n) + '"' + (n === etat.commune ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+  const options = '<option value="toutes">Toute la Polynésie</option>' + zones.map((n) =>
+    '<option value="' + esc(n) + '"' + (n === etat.zone ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
 
   const puces = ['tous', ...secteurs].map((s) => {
     const actif = s === etat.secteur;
@@ -314,38 +371,47 @@ function vuePromos() {
       '" aria-pressed="' + actif + '">' + (s === 'tous' ? 'Tout' : esc(s)) + '</button>';
   }).join('');
 
-  const filtrees = visibles.filter((p) => {
+  const garder = (p) => {
     const c = commerce(p.commerce);
-    return (etat.commune === 'toutes' || c.commune === etat.commune) && (etat.secteur === 'tous' || c.secteur === etat.secteur);
-  });
+    return (etat.zone === 'toutes' || c.zone === etat.zone) && (etat.secteur === 'tous' || c.secteur === etat.secteur);
+  };
+  const promos = v.promos.filter(garder);
+  const arrivages = v.arrivages.filter(garder);
 
-  const meilleure = visibles[0];
-  const liste = filtrees.length
-    ? filtrees.map(cartePromo).join('')
-    : (visibles.length
-      ? vide(Icones.nuage(110), 'Pas de promo ici pour l\'instant', 'Essaie une autre commune ou un autre secteur.')
-      : vide(Icones.nuage(110), 'Les premières promos arrivent', 'Reviens bientôt, ou touche « Mise à jour ».'));
+  let listes = '';
+  if (arrivages.length) listes += '<h2>Arrivages et nouveautés</h2><div class="liste">' + arrivages.map(cartePromo).join('') + '</div>';
+  if (promos.length) listes += (arrivages.length ? '<h2>Promos</h2>' : '') + '<div class="liste">' + promos.map(cartePromo).join('') + '</div>';
+  if (!listes) {
+    listes = tous.length
+      ? vide(Icones.nuage(110), 'Rien par ici pour l\'instant', 'Essaie une autre zone ou un autre secteur.')
+      : vide(Icones.nuage(110), 'Les premières promos arrivent', 'Reviens bientôt, ou touche « Mise à jour ».');
+  }
+
+  const meilleure = v.promos[0];
+  const dernier = v.arrivages[0];
+  const bas = meilleure
+    ? '<div><small>La plus forte remise</small><div class="chiffre" style="white-space:normal">' + esc(meilleure.produit) + '</div></div>' +
+      '<span class="etiquette">−' + remise(meilleure) + ' %</span>'
+    : (dernier
+      ? '<div><small>Dernier arrivage</small><div class="chiffre" style="white-space:normal">' + esc(dernier.produit) + '</div></div>' +
+        '<span class="etiquette">' + esc((commerce(dernier.commerce) || {}).zone || 'Arrivage') + '</span>'
+      : '<div><small>Aucune promo en cours</small></div>');
 
   return '' +
     '<section class="hero carte fond-beau">' +
       '<div class="hero-haut"><div class="hero-texte">' +
         '<small class="surtitre">Ia ora na !</small>' +
-        '<h1 class="titre">' + visibles.length + ' promo' + (visibles.length > 1 ? 's' : '') + '<br>au fenua</h1>' +
+        '<h1 class="titre">' + tous.length + ' promo' + (tous.length > 1 ? 's' : '') + '<br>au fenua</h1>' +
         '<span class="bulle">Mea māmā !</span>' +
       '</div><div class="mascotte">' + Icones.soleil(128, true) + '</div></div>' +
       '<div class="niho"></div>' +
-      '<div class="hero-bas">' + (meilleure
-        ? '<div><small>La plus forte remise</small><div class="chiffre" style="white-space:normal">' + esc(meilleure.produit) + '</div></div>' +
-          '<span class="etiquette">−' + remise(meilleure) + ' %</span>'
-        : '<div><small>Aucune promo en cours</small></div>') +
-      '</div>' +
+      '<div class="hero-bas">' + bas + '</div>' +
     '</section>' +
     '<div class="filtres">' +
-      '<label class="surtitre" for="commune">Où cherches-tu ?</label>' +
-      '<select id="commune" class="bouton">' + options + '</select>' +
+      '<label class="surtitre" for="zone">Où cherches-tu ?</label>' +
+      '<select id="zone" class="bouton">' + options + '</select>' +
       '<div class="puces">' + puces + '</div>' +
-    '</div>' +
-    '<div class="liste">' + liste + '</div>';
+    '</div>' + listes;
 }
 
 function vueCommerces() {
@@ -353,7 +419,7 @@ function vueCommerces() {
   const lignes = actifs.map((c) => {
     const n = promosDe(c.id).length;
     return '<a class="ligne carte" href="#/commerce/' + esc(c.id) + '">' +
-      '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong><small>' + esc(c.secteur) + ' · ' + esc(c.commune) + '</small></span>' +
+      '<span class="ligne-texte"><strong>' + esc(c.nom) + '</strong><small>' + esc(c.secteur) + (c.zone ? ' · ' + esc(c.zone) : '') + '</small></span>' +
       '<span class="pastille ' + (n ? 'fond-beau' : 'fond-variable') + '">' + n + ' promo' + (n > 1 ? 's' : '') + '</span></a>';
   }).join('');
 
@@ -366,15 +432,23 @@ function vueCommerces() {
 function vueCommerce(id) {
   const c = commerce(id);
   if (!c || !abonnementActif(c)) return vueIntrouvable();
-  const promos = promosDe(id).sort((a, b) => remise(b) - remise(a));
+  const promos = promosDe(id).sort((a, b) => (estPromo(a) === estPromo(b) ? remise(b) - remise(a) : (estPromo(a) ? 1 : -1)));
   const motifs = MOTIFS.map((m) => '<option>' + esc(m) + '</option>').join('');
 
   const cartes = promos.map((p) =>
     '<div class="promo-bloc">' + (p.photo ? balisePhoto(p, 'photo-grande') : '') +
     '<div class="promo carte">' + interieurPromo(p, false, true) + '</div>' +
-    '<details class="signaler"><summary>Signaler un problème</summary>' +
-    '<form data-signaler="' + esc(p.id) + '"><select name="motif" class="bouton" aria-label="Motif du signalement">' + motifs + '</select>' +
-    '<button class="bouton" type="submit">Envoyer</button></form></details></div>').join('');
+    '<div class="rang actions-promo">' +
+      '<button type="button" class="bouton partager" data-partager="' + esc(p.id) + '">' + iconePartage + '<span>Partager</span></button>' +
+      '<details class="signaler"><summary>Signaler un problème</summary>' +
+      '<form data-signaler="' + esc(p.id) + '"><select name="motif" class="bouton" aria-label="Motif du signalement">' + motifs + '</select>' +
+      '<button class="bouton" type="submit">Envoyer</button></form></details>' +
+    '</div></div>').join('');
+
+  const contacts =
+    (c.facebook ? '<a class="bouton contact messenger" href="https://m.me/' + esc(c.facebook) + '" target="_blank" rel="noopener">Écrire sur Messenger</a>' : '') +
+    (c.tel ? '<a class="bouton contact" href="tel:' + esc(c.tel.replace(/\s/g, '')) + '">Appeler</a>' : '') +
+    '<button type="button" class="bouton contact" data-partager-commerce="' + esc(c.id) + '">' + iconePartage + '<span>Partager</span></button>';
 
   return '' +
     '<div class="rang">' +
@@ -383,9 +457,9 @@ function vueCommerce(id) {
       '<span class="pastille bord fond-beau">' + esc(c.secteur) + '</span>' +
     '</div>' +
     '<div class="rang haut"><div><h1 class="titre">' + esc(c.nom) + '</h1>' +
-    '<p class="note">' + esc(c.commune) + (c.adresse ? ' · ' + esc(c.adresse) : '') +
-    (c.tel ? '<br>Tél. <a href="tel:' + esc(c.tel.replace(/\s/g, '')) + '">' + esc(c.tel) + '</a>' : '') + '</p></div>' +
+    '<p class="note">' + esc(lieu(c)) + (c.adresse ? '<br>' + esc(c.adresse) : '') + '</p></div>' +
     Icones.tiare(72, 'danse') + '</div>' +
+    '<div class="contacts">' + contacts + '</div>' +
     '<div class="niho"></div>' +
     '<h2>Ses promos du moment</h2>' +
     '<div class="liste">' + (cartes || vide(Icones.nuage(110), 'Pas de promo en ce moment', 'Reviens bientôt !')) + '</div>';
@@ -418,6 +492,11 @@ function emplacementLibre(uid) {
   return null;
 }
 
+function resumePromo(p) {
+  if (estPromo(p)) return prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · ' + echeance(p);
+  return 'Arrivage' + (p.prixPromo ? ' · ' + prix(p.prixPromo) : '') + ' · ' + echeance(p);
+}
+
 function vueTableau() {
   const uid = etat.utilisateur.uid;
   const c = commerce(uid);
@@ -432,51 +511,58 @@ function vueTableau() {
   const promos = promosDe(uid);
   const plein = promos.length >= MAX_PROMOS;
   const bloque = !actif || plein;
+  const arrivage = etat.typeAjout === 'arrivage';
 
   const lignes = promos.map((p) =>
     '<div class="ligne carte">' + (p.photo ? balisePhoto(p, 'vignette petite') : '') +
-    '<span class="ligne-texte"><strong>' + esc(p.produit) + '</strong>' +
-    '<small>' + prix(p.prixPromo) + ' au lieu de ' + prix(p.prixNormal) + ' · jusqu\'au ' + dateCourte(p.fin) + '</small></span>' +
+    '<span class="ligne-texte"><strong>' + esc(p.produit) + '</strong><small>' + esc(resumePromo(p)) + '</small></span>' +
     '<button type="button" class="bouton retirer" data-retirer="' + esc(p.id) + '">Retirer</button></div>').join('');
 
   const message = !c.actif ? 'Ton compte est suspendu : tes promos ne sont plus affichées. Contacte l\'équipe Māmā.'
     : (!actif ? 'Ton abonnement est terminé : tes promos ne sont plus affichées. Renouvelle-le pour publier à nouveau.'
-      : (plein ? 'Tu as atteint la limite de ' + MAX_PROMOS + ' promos. Retires-en une pour en publier une autre.' : ''));
+      : (plein ? 'Tu as atteint la limite de ' + MAX_PROMOS + ' annonces. Retires-en une pour en publier une autre.' : ''));
 
   const auj = iso(Date.now());
   const max = iso(Date.now() + MAX_JOURS * 86400000);
 
   return '' +
     '<div class="rang haut"><div><small class="surtitre">Espace commerçant</small>' +
-    '<h1 class="titre moyen">' + esc(c.nom) + '</h1><p class="note">' + esc(c.secteur) + ' · ' + esc(c.commune) + '</p></div>' +
+    '<h1 class="titre moyen">' + esc(c.nom) + '</h1><p class="note">' + esc(c.secteur) + (c.zone ? ' · ' + esc(c.zone) : '') + '</p></div>' +
     '<div class="mascotte">' + (actif ? Icones.soleil(88, true) : Icones.orage(88)) + '</div></div>' +
 
     '<section class="total carte ' + (actif ? 'fond-beau' : 'fond-hausse') + '">' +
       '<div><small>' + (!c.actif ? 'Compte suspendu' : (actif ? 'Abonnement actif jusqu\'au' : 'Abonnement terminé le')) + '</small>' +
       '<div class="chiffre">' + dateLongue(c.abonnement) + '</div></div>' +
-      '<span class="etiquette"><span class="compteur">' + promos.length + ' / ' + MAX_PROMOS + '</span> promos</span>' +
+      '<span class="etiquette"><span class="compteur">' + promos.length + ' / ' + MAX_PROMOS + '</span> annonces</span>' +
     '</section>' +
 
-    '<h2>Mes promos en ligne</h2>' +
-    '<div class="liste">' + (lignes || '<p class="note">Aucune promo publiée pour l\'instant.</p>') + '</div>' +
+    '<h2>Mes annonces en ligne</h2>' +
+    '<div class="liste">' + (lignes || '<p class="note">Aucune annonce publiée pour l\'instant.</p>') + '</div>' +
 
-    '<h2>Publier une promo</h2>' +
+    '<h2>Publier une annonce</h2>' +
     '<form id="ajout" class="formulaire carte" novalidate>' +
       (message ? '<p class="erreur">' + esc(message) + '</p>' : '') +
       '<fieldset' + (bloque ? ' disabled' : '') + '>' +
-        '<label for="a-produit">Produit ou service</label>' +
-        '<input id="a-produit" name="produit" class="bouton" maxlength="60" required>' +
-        '<div class="deux">' +
-          '<div><label for="a-normal">Prix normal (F)</label><input id="a-normal" name="prixNormal" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
-          '<div><label for="a-promo">Prix promo (F)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
+        '<div class="type-choix" role="group" aria-label="Type d\'annonce">' +
+          '<button type="button" class="bouton' + (arrivage ? '' : ' active') + '" data-type="promo" aria-pressed="' + !arrivage + '">Promo avec remise</button>' +
+          '<button type="button" class="bouton' + (arrivage ? ' active' : '') + '" data-type="arrivage" aria-pressed="' + arrivage + '">Arrivage ou nouveauté</button>' +
         '</div>' +
-        '<label for="a-fin">Dernier jour de la promo (' + MAX_JOURS + ' jours au plus)</label>' +
+        '<label for="a-produit">' + (arrivage ? 'Ce qui est arrivé' : 'Produit ou service') + '</label>' +
+        '<input id="a-produit" name="produit" class="bouton" maxlength="60" required placeholder="' + (arrivage ? 'Pastèques, gaz, ciment…' : '') + '">' +
+        (arrivage
+          ? '<label for="a-promo">Prix (F, facultatif)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1">'
+          : '<div class="deux">' +
+            '<div><label for="a-normal">Prix normal (F)</label><input id="a-normal" name="prixNormal" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
+            '<div><label for="a-promo">Prix promo (F)</label><input id="a-promo" name="prixPromo" class="bouton" type="number" inputmode="numeric" min="1" required></div>' +
+            '</div>') +
+        '<label for="a-fin">' + (arrivage ? 'Retirer l\'annonce le' : 'Dernier jour de la promo') + ' (' + MAX_JOURS + ' jours au plus)</label>' +
         '<input id="a-fin" name="fin" class="bouton" type="date" min="' + auj + '" max="' + max + '" required>' +
+        '<label class="case"><input type="checkbox" name="epuisement"> Jusqu\'à épuisement du stock</label>' +
         '<label for="a-photo">Photo (facultative)</label>' +
         '<input id="a-photo" name="photo" class="bouton fichier" type="file" accept="image/*">' +
         '<img id="a-apercu" class="apercu" alt="Aperçu de la photo" hidden>' +
         '<p class="erreur" role="alert"></p>' +
-        '<button class="bouton cta" type="submit">Publier la promo</button>' +
+        '<button class="bouton cta" type="submit">' + (arrivage ? 'Publier l\'arrivage' : 'Publier la promo') + '</button>' +
       '</fieldset>' +
     '</form>' + sortie;
 }
@@ -499,11 +585,12 @@ function vueAdmin() {
     const statut = !c.actif ? ['fond-hausse', 'Suspendu']
       : (c.abonnement > Date.now() ? ['fond-beau', 'Actif'] : ['fond-variable', 'Abonnement terminé']);
     const promos = (etat.promos || []).filter((p) => p.commerce === c.id).map((p) =>
-      '<div class="admin-promo">' + (p.photo ? balisePhoto(p, 'vignette petite') : '') + '<span class="ligne-texte">' + esc(p.produit) + ' · ' + prix(p.prixPromo) + (enCours(p) ? '' : ' · terminée') + '</span>' +
+      '<div class="admin-promo">' + (p.photo ? balisePhoto(p, 'vignette petite') : '') + '<span class="ligne-texte">' + esc(p.produit) +
+      (p.prixPromo ? ' · ' + prix(p.prixPromo) : '') + (estPromo(p) ? '' : ' · arrivage') + (enCours(p) ? '' : ' · terminée') + '</span>' +
       '<button type="button" class="bouton retirer danger" data-admin-supprimer="' + esc(p.id) + '">Supprimer</button></div>').join('');
     return '<div class="admin-commerce carte">' +
       '<div class="rang"><strong>' + esc(c.nom) + '</strong><span class="pastille bord ' + statut[0] + '">' + statut[1] + '</span></div>' +
-      '<small>' + esc(c.secteur) + ' · ' + esc(c.commune) + (c.tel ? ' · ' + esc(c.tel) : '') + '</small>' +
+      '<small>' + esc(c.secteur) + ' · ' + esc(lieu(c)) + (c.tel ? ' · ' + esc(c.tel) : '') + (c.facebook ? ' · fb/' + esc(c.facebook) : '') + '</small>' +
       '<form class="admin-actions" data-abonnement="' + esc(c.id) + '">' +
         '<label class="surtitre" for="ab-' + esc(c.id) + '">Abonnement jusqu\'au</label>' +
         '<input id="ab-' + esc(c.id) + '" name="date" type="date" class="bouton" value="' + (c.abonnement ? iso(c.abonnement) : '') + '" required>' +
@@ -514,7 +601,7 @@ function vueAdmin() {
   }).join('');
 
   const secteurs = SECTEURS.map((s) => '<option>' + esc(s) + '</option>').join('');
-  const communes = COMMUNES.map((s) => '<option value="' + esc(s) + '"></option>').join('');
+  const zones = ZONES.map((s) => '<option>' + esc(s) + '</option>').join('');
   const dansUnAn = iso(Date.now() + 365 * 86400000);
 
   return enTete('Administration', 'Tableau<br>de bord', Icones.tiare(84, 'danse')) +
@@ -528,10 +615,14 @@ function vueAdmin() {
     '<form id="nouveau" class="formulaire carte" novalidate>' +
       '<label for="n-nom">Nom du commerce</label><input id="n-nom" name="nom" class="bouton" maxlength="60" required>' +
       '<label for="n-secteur">Secteur</label><select id="n-secteur" name="secteur" class="bouton">' + secteurs + '</select>' +
-      '<label for="n-commune">Commune</label><input id="n-commune" name="commune" class="bouton" list="communes" maxlength="40" required>' +
-      '<datalist id="communes">' + communes + '</datalist>' +
-      '<label for="n-adresse">Adresse</label><input id="n-adresse" name="adresse" class="bouton" maxlength="80">' +
+      '<label for="n-zone">Zone</label><select id="n-zone" name="zone" class="bouton">' + zones + '</select>' +
+      '<div class="deux">' +
+        '<div><label for="n-pk">PK</label><input id="n-pk" name="pk" class="bouton" maxlength="8" placeholder="12,5"></div>' +
+        '<div><label for="n-cote">Côté</label><select id="n-cote" name="cote" class="bouton"><option value="">—</option><option value="mer">mer</option><option value="montagne">montagne</option></select></div>' +
+      '</div>' +
+      '<label for="n-adresse">Repère ou adresse (facultatif)</label><input id="n-adresse" name="adresse" class="bouton" maxlength="80" placeholder="Face à la mairie, servitude Teroma…">' +
       '<label for="n-tel">Téléphone</label><input id="n-tel" name="tel" class="bouton" type="tel" maxlength="20">' +
+      '<label for="n-facebook">Page Facebook (nom dans l\'adresse de la page)</label><input id="n-facebook" name="facebook" class="bouton" maxlength="80" autocapitalize="none" placeholder="hyperupirae">' +
       '<label for="n-email">E-mail de connexion du commerce</label><input id="n-email" name="email" class="bouton" type="email" autocapitalize="none" autocomplete="off" required>' +
       '<label for="n-mdp">Mot de passe provisoire (6 caractères au moins)</label><input id="n-mdp" name="motdepasse" class="bouton" autocomplete="off" minlength="6" required>' +
       '<label for="n-abo">Abonnement jusqu\'au</label><input id="n-abo" name="abonnement" class="bouton" type="date" value="' + dansUnAn + '" required>' +
@@ -598,7 +689,7 @@ boutonMaj.addEventListener('click', async () => {
 });
 
 vue.addEventListener('change', (e) => {
-  if (e.target.id === 'commune') { etat.commune = e.target.value; afficher(); }
+  if (e.target.id === 'zone') { etat.zone = e.target.value; afficher(); }
 
   if (e.target.id === 'a-photo') {
     const apercu = document.getElementById('a-apercu');
@@ -616,6 +707,29 @@ vue.addEventListener('click', (e) => {
   let b;
 
   if ((b = cible('[data-secteur]'))) { etat.secteur = b.getAttribute('data-secteur'); afficher(); return; }
+
+  if ((b = cible('[data-type]'))) {
+    // Le type d'annonce change le formulaire ; on garde ce qui est déjà tapé.
+    const f = document.getElementById('ajout');
+    const produit = f ? f.produit.value : '';
+    etat.typeAjout = b.getAttribute('data-type');
+    afficher();
+    const f2 = document.getElementById('ajout');
+    if (f2) { f2.produit.value = produit; f2.produit.focus(); }
+    return;
+  }
+
+  if ((b = cible('[data-partager]'))) {
+    const p = etat.promos.find((x) => x.id === b.getAttribute('data-partager'));
+    if (p) partager('Māmā · ' + p.produit, textePartage(p), urlCommerce(p.commerce));
+    return;
+  }
+
+  if ((b = cible('[data-partager-commerce]'))) {
+    const c = commerce(b.getAttribute('data-partager-commerce'));
+    if (c) partager('Māmā · ' + c.nom, 'Les promos de ' + c.nom + (c.zone ? ' (' + c.zone + ')' : '') + ' sur Māmā.', urlCommerce(c.id));
+    return;
+  }
 
   if ((b = cible('[data-deconnexion]'))) {
     action(b, async () => { await signOut(auth); toast('À bientôt !'); });
@@ -636,17 +750,17 @@ vue.addEventListener('click', (e) => {
     action(b, async () => {
       await supprimerPromo(b.getAttribute('data-retirer'));
       await charger(true);
-      toast('Promo retirée');
+      toast('Annonce retirée');
     });
     return;
   }
 
   if ((b = cible('[data-admin-supprimer]'))) {
-    if (!confirm('Supprimer cette promo ?')) return;
+    if (!confirm('Supprimer cette annonce ?')) return;
     action(b, async () => {
       await supprimerPromo(b.getAttribute('data-admin-supprimer'));
       await charger(true);
-      toast('Promo supprimée');
+      toast('Annonce supprimée');
     });
     return;
   }
@@ -670,7 +784,7 @@ vue.addEventListener('click', (e) => {
       await deleteDoc(doc(db, 'signalements', idSignalement));
       await chargerSignalements();
       await charger(true);
-      toast(idPromo ? 'Promo supprimée' : 'Signalement classé');
+      toast(idPromo ? 'Annonce supprimée' : 'Signalement classé');
     });
   }
 });
@@ -697,36 +811,42 @@ vue.addEventListener('submit', (e) => {
 
   if (f.id === 'ajout') {
     const uid = etat.utilisateur.uid;
+    const arrivage = etat.typeAjout === 'arrivage';
     const produit = f.produit.value.trim();
-    const normal = Math.round(Number(f.prixNormal.value));
-    const promo = Math.round(Number(f.prixPromo.value));
+    const normal = arrivage ? null : Math.round(Number(f.prixNormal.value));
+    const promo = f.prixPromo.value ? Math.round(Number(f.prixPromo.value)) : null;
     const fin = f.fin.value;
     const emplacement = emplacementLibre(uid);
 
-    if (!emplacement) return refuser('Limite de ' + MAX_PROMOS + ' promos atteinte.');
-    if (!produit) return refuser('Indique le nom du produit.');
-    if (!(normal > 0) || !(promo > 0)) return refuser('Indique les deux prix.');
-    if (promo >= normal) return refuser('Le prix promo doit être plus bas que le prix normal.');
-    if (!fin || finDeJournee(fin).getTime() < Date.now()) return refuser('Choisis un dernier jour à partir d\'aujourd\'hui.');
-    if (finDeJournee(fin).getTime() > Date.now() + (MAX_JOURS + 1) * 86400000) return refuser('La promo ne peut pas durer plus de ' + MAX_JOURS + ' jours.');
+    if (!emplacement) return refuser('Limite de ' + MAX_PROMOS + ' annonces atteinte.');
+    if (!produit) return refuser(arrivage ? 'Indique ce qui est arrivé.' : 'Indique le nom du produit.');
+    if (!arrivage && (!(normal > 0) || !(promo > 0))) return refuser('Indique les deux prix.');
+    if (!arrivage && promo >= normal) return refuser('Le prix promo doit être plus bas que le prix normal.');
+    if (arrivage && promo !== null && !(promo > 0)) return refuser('Le prix doit être un nombre positif, ou vide.');
+    if (!fin || finDeJournee(fin).getTime() < Date.now()) return refuser('Choisis un jour à partir d\'aujourd\'hui.');
+    if (finDeJournee(fin).getTime() > Date.now() + (MAX_JOURS + 1) * 86400000) return refuser('L\'annonce ne peut pas durer plus de ' + MAX_JOURS + ' jours.');
 
     envoyer(async () => {
       const fichier = f.photo.files[0];
       const image = fichier ? await compresser(fichier) : null;
       const ancienne = etat.promos.find((x) => x.id === emplacement);
-      // La photo d'abord : une promo marquée « avec photo » a ainsi toujours sa photo.
+      // La photo d'abord : une annonce marquée « avec photo » a ainsi toujours sa photo.
       if (image) {
         await setDoc(doc(db, 'photos', emplacement), { commerce: uid, image: image, cree: serverTimestamp() });
       } else if (ancienne && ancienne.photo) {
         await deleteDoc(doc(db, 'photos', emplacement)).catch((e2) => console.error(e2));
       }
       photos.delete(emplacement);
-      await setDoc(doc(db, 'promos', emplacement), {
-        commerce: uid, produit: produit, prixNormal: normal, prixPromo: promo,
-        fin: Timestamp.fromDate(finDeJournee(fin)), photo: !!image, cree: serverTimestamp()
-      });
+      const donnees = {
+        commerce: uid, produit: produit, type: arrivage ? 'arrivage' : 'promo',
+        fin: Timestamp.fromDate(finDeJournee(fin)), epuisement: !!f.epuisement.checked,
+        photo: !!image, cree: serverTimestamp()
+      };
+      if (!arrivage) { donnees.prixNormal = normal; donnees.prixPromo = promo; }
+      else if (promo) donnees.prixPromo = promo;
+      await setDoc(doc(db, 'promos', emplacement), donnees);
       await charger(true);
-      toast('Promo publiée !');
+      toast(arrivage ? 'Arrivage publié !' : 'Promo publiée !');
     });
     return;
   }
@@ -735,9 +855,17 @@ vue.addEventListener('submit', (e) => {
     const p = etat.promos.find((x) => x.id === f.getAttribute('data-signaler'));
     if (!p) return;
     action(bouton, async () => {
-      await addDoc(collection(db, 'signalements'), {
-        promo: p.id, commerce: p.commerce, produit: p.produit, motif: f.motif.value, cree: serverTimestamp()
-      });
+      // Un signalement par appareil et par promo : le visiteur reçoit un identifiant anonyme.
+      let compte = auth.currentUser;
+      if (!compte) compte = (await signInAnonymously(auth)).user;
+      try {
+        await setDoc(doc(db, 'signalements', p.id + '_' + compte.uid), {
+          promo: p.id, commerce: p.commerce, produit: p.produit, motif: f.motif.value, cree: serverTimestamp()
+        });
+      } catch (err) {
+        if (err && /permission-denied/.test(err.code || '')) { toast('Tu as déjà signalé cette promo. Māuruuru !'); return; }
+        throw err;
+      }
       f.closest('details').open = false;
       toast('Māuruuru ! Signalement envoyé.');
     });
@@ -758,10 +886,11 @@ vue.addEventListener('submit', (e) => {
 
   if (f.id === 'nouveau') {
     const nom = f.nom.value.trim();
-    const commune = f.commune.value.trim();
     const email = f.email.value.trim();
     const mdp = f.motdepasse.value;
-    if (!nom || !commune) return refuser('Indique le nom et la commune.');
+    // « https://www.facebook.com/hyperupirae/ » ou « @hyperupirae » → « hyperupirae »
+    const facebook = f.facebook.value.trim().replace(/^https?:\/\/(www\.|m\.)?(facebook\.com|m\.me)\//i, '').replace(/[/?#].*$/, '').replace(/^@/, '');
+    if (!nom) return refuser('Indique le nom du commerce.');
     if (!email) return refuser('Indique l\'adresse e-mail du commerce.');
     if (mdp.length < 6) return refuser('Mot de passe trop court : 6 caractères au minimum.');
     if (!f.abonnement.value) return refuser('Indique la fin de l\'abonnement.');
@@ -779,8 +908,9 @@ vue.addEventListener('submit', (e) => {
         await deleteApp(app2);
       }
       await setDoc(doc(db, 'commerces', uid), {
-        nom: nom, secteur: f.secteur.value, commune: commune,
-        adresse: f.adresse.value.trim(), tel: f.tel.value.trim(),
+        nom: nom, secteur: f.secteur.value, zone: f.zone.value,
+        pk: f.pk.value.trim(), cote: f.cote.value, adresse: f.adresse.value.trim(),
+        tel: f.tel.value.trim(), facebook: facebook,
         actif: true, abonnement: Timestamp.fromDate(finDeJournee(f.abonnement.value)),
         cree: serverTimestamp()
       });
@@ -794,7 +924,9 @@ vue.addEventListener('submit', (e) => {
 
 document.getElementById('logo-tiare').innerHTML = Icones.tiare(40, 'danse');
 
-onAuthStateChanged(auth, async (utilisateur) => {
+onAuthStateChanged(auth, async (compte) => {
+  // Un visiteur anonyme (créé pour signaler une promo) n'est pas un commerce connecté.
+  const utilisateur = compte && !compte.isAnonymous ? compte : null;
   etat.utilisateur = utilisateur;
   etat.estAdmin = false;
   etat.signalements = [];

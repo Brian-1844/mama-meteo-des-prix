@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Māmā · test des règles de sécurité</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .tests { display: flex; flex-direction: column; gap: 8px; }
+    .test { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 3px solid var(--encre); border-radius: 14px; background: var(--blanc); font-size: 14px; }
+    .test .etat { flex-shrink: 0; width: 28px; height: 28px; border: 2px solid var(--encre); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+    .test.ok .etat { background: var(--turquoise); }
+    .test.ko .etat { background: var(--hibiscus); }
+    .test.skip .etat { background: var(--variable); }
+    .test small { display: block; color: var(--gris); }
+    .bilan { font: 800 20px var(--titre); margin: 16px 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <main class="vue" style="padding-top: 20px">
+      <small class="surtitre">Page de vérification · à supprimer du dépôt après usage</small>
+      <h1 class="titre moyen">Les règles tiennent-elles ?</h1>
+      <p class="note">Cette page tente, avec un compte de commerce de test puis en visiteur anonyme, une série d'actions interdites. Chacune doit être refusée par le serveur. Deux actions autorisées servent de témoin.</p>
+      <form id="lancer" class="formulaire carte" style="margin-top: 14px">
+        <label for="t-email">E-mail d'un commerce de test (pas l'administrateur)</label>
+        <input id="t-email" class="bouton" type="email" autocapitalize="none" required>
+        <label for="t-mdp">Mot de passe</label>
+        <input id="t-mdp" class="bouton" type="password" required>
+        <p class="note">Le test écrit dans l'emplacement 4 de ce commerce. S'il est occupé, ces essais sont ignorés.</p>
+        <button class="bouton cta" type="submit">Lancer les tests</button>
+      </form>
+      <div id="bilan" class="bilan"></div>
+      <div id="tests" class="tests"></div>
+      <p class="note" id="fin" hidden>Un signalement de test nommé « test-securite » a été créé : classe-le depuis le tableau de bord. Un test en rouge veut dire que les règles publiées ne sont pas celles du fichier firestore.rules, ou qu'elles ont un trou : envoie la capture.</p>
+    </main>
+  </div>
+  <script type="module" src="test-securite.js"></script>
+</body>
+</html>
